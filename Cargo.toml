@@ -1,0 +1,12 @@
+[package]
+name = "gpui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = ["font-kit", "runtime_shaders"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+# Optional, for default bundled assets
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component" }
+anyhow = "1.0"
