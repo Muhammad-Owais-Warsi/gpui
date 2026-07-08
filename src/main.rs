@@ -2,15 +2,16 @@ use gpui::*;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::select::{Select, SelectState};
-use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
+use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::table::{
-    Table, TableBody, TableCaption, TableCell, TableFooter, TableHead, TableHeader, TableRow,
+    Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow,
 };
 use gpui_component::tag::Tag;
-use gpui_component::{button::*, *};
+use gpui_component::theme::{Theme, ThemeRegistry};
+use gpui_component::{ActiveTheme as _, button::*, *};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn next_id() -> usize {
@@ -47,6 +48,7 @@ struct ApiClient {
     nodes: Vec<Node>,
     tabs: Vec<TabState>,
     active_tab: Option<usize>,
+    scroll_handle: ScrollHandle,
 }
 
 impl ApiClient {
@@ -91,6 +93,7 @@ impl ApiClient {
             nodes,
             tabs: Vec::new(),
             active_tab: None,
+            scroll_handle: ScrollHandle::new(),
         };
 
         let tab = this.new_tab(window, cx, "get_req", "GET".to_string());
@@ -140,21 +143,39 @@ impl ApiClient {
 
     fn build_method_tag(method: &str) -> impl IntoElement {
         match method {
-            "GET" => Tag::color(ColorName::Green).outline().child("GET"),
+            "GET" => Tag::color(ColorName::Green).outline().child("GET").xsmall(),
 
-            "POST" => Tag::color(ColorName::Blue).outline().child("POST"),
+            "POST" => Tag::color(ColorName::Blue).outline().child("POST").xsmall(),
 
-            "PUT" => Tag::color(ColorName::Yellow).outline().child("PUT"),
+            "PUT" => Tag::color(ColorName::Yellow)
+                .outline()
+                .child("PUT")
+                .xsmall(),
 
-            "PATCH" => Tag::color(ColorName::Orange).outline().child("PATCH"),
+            "PATCH" => Tag::color(ColorName::Orange)
+                .outline()
+                .child("PATCH")
+                .xsmall(),
 
-            "DELETE" => Tag::color(ColorName::Red).outline().child("DELETE"),
+            "DELETE" => Tag::color(ColorName::Red)
+                .outline()
+                .child("DELETE")
+                .xsmall(),
 
-            "HEAD" => Tag::color(ColorName::Purple).outline().child("HEAD"),
+            "HEAD" => Tag::color(ColorName::Purple)
+                .outline()
+                .child("HEAD")
+                .xsmall(),
 
-            "OPTIONS" => Tag::color(ColorName::Gray).outline().child("OPTIONS"),
+            "OPTIONS" => Tag::color(ColorName::Gray)
+                .outline()
+                .child("OPTIONS")
+                .xsmall(),
 
-            _ => Tag::color(ColorName::Neutral).outline().child("Nan"),
+            _ => Tag::color(ColorName::Neutral)
+                .outline()
+                .child("Nan")
+                .xsmall(),
         }
     }
 
@@ -202,8 +223,12 @@ impl ApiClient {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         Sidebar::new("api-sidebar")
             .header(
-                SidebarHeader::new()
-                    .child(h_flex().gap_2().child(IconName::Folder).child("Workspace")),
+                SidebarHeader::new().child(
+                    h_flex()
+                        .gap(rems(0.75))
+                        .child(IconName::Palette)
+                        .child(div().flex_1().child("workspace")),
+                ),
             )
             .child(
                 SidebarGroup::new("Explorer").child(
@@ -217,20 +242,31 @@ impl ApiClient {
     }
 
     fn render_new_tab_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("add-tab")
-            .label("Add Tab")
-            .secondary()
-            .on_click(cx.listener(|this: &mut ApiClient, _event, window, cx| {
-                let tab = this.new_tab(window, cx, "new", "GET".to_string());
-                this.active_tab = Some(tab.id);
-                this.tabs.push(tab);
-                cx.notify();
-            }))
+        div()
+            .border_l_1()
+            .border_color(cx.theme().border)
+            .h_full()
+            .px_2()
+            .items_center()
+            .justify_center()
+            .child(
+                Button::new("add-tab")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Plus)
+                    .on_click(cx.listener(|this: &mut ApiClient, _event, window, cx| {
+                        let tab = this.new_tab(window, cx, "new", "GET".to_string());
+                        this.active_tab = Some(tab.id);
+                        this.tabs.push(tab);
+                        cx.notify();
+                    })),
+            )
     }
 
     fn render_tab(&self, cx: &mut Context<Self>, tab: &TabState) -> Tab {
         let id = tab.id;
         let name = tab.name.clone();
+
         let method = tab
             .method
             .read(cx)
@@ -239,26 +275,32 @@ impl ApiClient {
             .unwrap_or("");
 
         Tab::default()
-            .prefix(Self::build_method_tag(method))
-            .suffix(
-                Button::new("back")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Close)
-                    .on_click(cx.listener(
-                        move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
-                            this.tabs.retain(|t| t.id != id);
-                            this.active_tab = this.tabs.last().map(|t| t.id);
-                            cx.notify()
-                        },
-                    )),
-            )
+            .px_1()
+            .with_variant(tab::TabVariant::Tab)
+            .prefix(div().mr_1().child(Self::build_method_tag(method)))
             .label(name)
-            .large()
-            .outline()
+            .suffix(
+                h_flex().child(
+                    Button::new(("close-tab", id))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Close)
+                        .on_click(cx.listener(
+                            move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
+                                this.tabs.retain(|t| t.id != id);
+                                this.active_tab = this.tabs.last().map(|t| t.id);
+                                cx.notify();
+                            },
+                        )),
+                ),
+            )
     }
+    fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self
+            .active_tab
+            .and_then(|id| self.tabs.iter().position(|t| t.id == id))
+            .unwrap_or(0);
 
-    fn render_tabs(&self, cx: &mut Context<Self>, selected: usize) -> impl IntoElement {
         TabBar::new("tabs")
             .selected_index(selected)
             .on_click(
@@ -269,16 +311,9 @@ impl ApiClient {
                     }
                 }),
             )
+            .track_scroll(&self.scroll_handle)
+            .suffix(self.render_new_tab_button(cx))
             .children(self.tabs.iter().map(|tab| Self::render_tab(&self, cx, tab)))
-    }
-
-    fn editor_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self
-            .active_tab
-            .and_then(|id| self.tabs.iter().position(|t| t.id == id))
-            .unwrap_or(0);
-
-        div().child(Self::render_tabs(&self, cx, selected))
     }
 
     fn render_editor(&self, _cx: &Context<Self>) -> impl IntoElement {
@@ -290,9 +325,10 @@ impl ApiClient {
         };
 
         h_flex()
-            .gap_2()
-            .child(Select::new(&tab.method))
-            .child(Input::new(&tab.url))
+            .w_full()
+            .gap(rems(0.5))
+            .child(div().w(px(110.)).child(Select::new(&tab.method)))
+            .child(div().flex_1().child(Input::new(&tab.url)))
             .child(Button::new("send").primary().label("Send"))
     }
 
@@ -307,25 +343,7 @@ impl ApiClient {
         }
     }
 
-    fn render_new_query_param_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(tab_id) = self.active_tab else {
-            return div();
-        };
-
-        div().child(
-            Button::new("add-qp")
-                .label("Add Query")
-                .secondary()
-                .on_click(
-                    cx.listener(move |this: &mut ApiClient, _event, window, cx| {
-                        this.new_query_param(window, cx, tab_id);
-                        cx.notify();
-                    }),
-                ),
-        )
-    }
-
-    fn render_query_params_table(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_query_params_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(tab) = self
             .active_tab
             .and_then(|id| self.tabs.iter().find(|t| t.id == id))
@@ -334,63 +352,82 @@ impl ApiClient {
         };
         let tab_id = tab.id;
 
-        div().child(
-            Table::new()
-                .child(
-                    TableHeader::new().child(
-                        TableRow::new()
-                            .child(TableHead::new().child(""))
-                            .child(TableHead::new().child("Key"))
-                            .child(TableHead::new().child("Value")),
+        v_flex()
+            .gap(rems(1.))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap(rems(0.5))
+                    .child(div().flex_1().child(TableCaption::new().child("Query Parameters")))
+                    .child(
+                        Button::new("add-qp")
+                            .label("Add Query")
+                            .ghost()
+                            .small()
+                            .on_click(
+                                cx.listener(move |this: &mut ApiClient, _event, window, cx| {
+                                    this.new_query_param(window, cx, tab_id);
+                                    cx.notify();
+                                }),
+                            ),
                     ),
-                )
-                .child(
-                    TableBody::new().children(tab.query_params.iter().enumerate().map(
-                        |(i, entity)| {
-                            let entity = entity.clone();
-                            let (key, value, active) = {
-                                let state = entity.read(cx);
-                                (state.key.clone(), state.value.clone(), state.active)
-                            };
-
+            )
+            .child(
+                Table::new()
+                    .child(
+                        TableHeader::new().child(
                             TableRow::new()
-                                .child(TableCell::new().child(
-                                    Checkbox::new(format!("qp-{i}")).checked(active).on_click({
-                                        let entity = entity.clone();
-                                        cx.listener(move |_this: &mut ApiClient, checked: &bool, _window, cx| {
-                                            entity.update(cx, |qp, _cx| qp.active = *checked);
-                                            cx.notify();
-                                        })
-                                    }),
-                                ))
-                                .child(TableCell::new().child(Input::new(&key)))
-                                .child(TableCell::new().child(Input::new(&value)))
-                                .child(
-                                    TableCell::new().child(
-                                        Button::new("del")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::Delete)
-                                            .on_click({
-                                                let entity = entity.clone();
-                                                cx.listener(move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
-                                                    if let Some(target_tab) =
-                                                        this.tabs.iter_mut().find(|t| t.id == tab_id)
-                                                    {
-                                                        target_tab
-                                                            .query_params
-                                                            .retain(|q| q.entity_id() != entity.entity_id());
-                                                    }
-                                                    cx.notify();
-                                                })
-                                            }),
-                                    ),
-                                )
-                        },
-                    )),
-                )
-                .child(TableCaption::new().child("Query Parameters")),
-        )
+                                .child(TableHead::new().child(""))
+                                .child(TableHead::new().child("Key"))
+                                .child(TableHead::new().child("Value")),
+                        ),
+                    )
+                    .child(
+                        TableBody::new().children(tab.query_params.iter().enumerate().map(
+                            |(i, entity)| {
+                                let entity = entity.clone();
+                                let (key, value, active) = {
+                                    let state = entity.read(cx);
+                                    (state.key.clone(), state.value.clone(), state.active)
+                                };
+
+                                TableRow::new()
+                                    .child(TableCell::new().child(
+                                        Checkbox::new(format!("qp-{i}")).checked(active).on_click({
+                                            let entity = entity.clone();
+                                            cx.listener(move |_this: &mut ApiClient, checked: &bool, _window, cx| {
+                                                entity.update(cx, |qp, _cx| qp.active = *checked);
+                                                cx.notify();
+                                            })
+                                        }),
+                                    ))
+                                    .child(TableCell::new().child(Input::new(&key)))
+                                    .child(TableCell::new().child(Input::new(&value)))
+                                    .child(
+                                        TableCell::new().child(
+                                            Button::new("del")
+                                                .ghost()
+                                                .xsmall()
+                                                .icon(IconName::Delete)
+                                                .on_click({
+                                                    let entity = entity.clone();
+                                                    cx.listener(move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
+                                                        if let Some(target_tab) =
+                                                            this.tabs.iter_mut().find(|t| t.id == tab_id)
+                                                        {
+                                                            target_tab
+                                                                .query_params
+                                                                .retain(|q| q.entity_id() != entity.entity_id());
+                                                        }
+                                                        cx.notify();
+                                                    })
+                                                }),
+                                        ),
+                                    )
+                            },
+                        )),
+                    ),
+            )
     }
 }
 
@@ -399,17 +436,27 @@ impl Render for ApiClient {
         div()
             .size_full()
             .flex()
-            .child(self.render_sidebar(cx))
+            .child(div().w(px(256.)).h_full().child(self.render_sidebar(cx)))
             .child(
                 div()
                     .flex_1()
+                    .h_full()
                     .v_flex()
+                    .gap(rems(1.))
                     .overflow_y_scrollbar()
-                    .child(self.editor_header(cx))
-                    .child(self.render_editor(cx))
-                    .child(self.render_new_tab_button(cx))
-                    .child(self.render_new_query_param_button(cx))
-                    .child(self.render_query_params_table(cx)),
+                    .child(
+                        div()
+                            .flex_none()
+                            .overflow_x_hidden()
+                            .child(self.render_tab_bar(cx)),
+                    )
+                    .child(div().px(px(24.)).child(self.render_editor(cx)))
+                    .child(
+                        div()
+                            .px(px(24.))
+                            .pb(px(24.))
+                            .child(self.render_query_params_section(cx)),
+                    ),
             )
     }
 }
