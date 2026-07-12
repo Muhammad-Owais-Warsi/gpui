@@ -17,6 +17,7 @@ pub struct Tabs {
     pub(crate) query_params: Vec<Entity<QueryParams>>,
     pub(crate) pending: bool,
     pub(crate) dirty: bool,
+    pub(crate) selected_editor_config: usize,
 }
 
 pub fn add_tab(
@@ -54,7 +55,46 @@ pub fn add_tab(
         query_params: vec![],
         pending: false,
         dirty: false,
+        selected_editor_config: 0,
     }
+}
+
+pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {
+    let selected = api
+        .active_tab
+        .and_then(|id| api.tabs.iter().find(|t| t.id == id))
+        .map(|t| t.selected_editor_config)
+        .unwrap_or(0);
+
+    div()
+        .w_full()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .child(
+            div().px(px(24.)).child(
+                TabBar::new("request-tabs")
+                    .w_full()
+                    .with_variant(tab::TabVariant::Underline)
+                    .selected_index(selected)
+                    .child(Tab::new().label("Params"))
+                    .child(Tab::new().label("Authorization"))
+                    .child(Tab::new().label("Headers"))
+                    .child(Tab::new().label("Body"))
+                    .child(Tab::new().label("Settings"))
+                    .on_click(cx.listener(
+                        move |this: &mut ApiClient, idx: &usize, _window, cx| {
+                            if let Some(tab) = this
+                                .active_tab
+                                .and_then(|id| this.tabs.iter_mut().find(|t| t.id == id))
+                            {
+                                tab.selected_editor_config = *idx;
+                            }
+
+                            cx.notify();
+                        },
+                    )),
+            ),
+        )
 }
 
 pub fn render_new_tab_button(_api: &ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {

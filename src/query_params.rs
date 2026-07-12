@@ -79,14 +79,15 @@ pub fn render_query_params_section(
     let tab_id = tab.id;
 
     v_flex()
-        .gap(rems(1.))
+        .gap(rems(0.75))
         .child(
             h_flex()
                 .items_center()
                 .child(div().flex_1())
                 .child(
                     Button::new("add-qp")
-                        .small()
+
+                        .label("Add Param")
                         .icon(IconName::Plus)
                         .tooltip("Add Query Param")
                         .ghost()
@@ -136,7 +137,7 @@ pub fn render_query_params_section(
                                     TableCell::new().w(rems(2.5)).flex().justify_end().child(
                                         Button::new("del")
                                             .ghost()
-                                            .xsmall()
+                                            .small()
                                             .icon(IconName::Delete)
                                             .on_click({
                                                 let entity = entity.clone();

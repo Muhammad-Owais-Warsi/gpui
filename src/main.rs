@@ -2,11 +2,12 @@ mod helpers;
 mod query_params;
 mod tabs;
 use crate::helpers::build_method_tag;
-use crate::tabs::{Tabs, add_tab, render_tab_bar};
+use crate::tabs::{Tabs, add_tab, render_editor_config, render_tab_bar};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::Theme;
 use gpui_component::input::Input;
+use gpui_component::resizable::{resizable_panel, v_resizable};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::sidebar::{
@@ -32,7 +33,7 @@ pub(crate) struct ApiClient {
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) theme: Entity<SelectState<Vec<SharedString>>>,
     pub(crate) sidebar_collapsed: bool,
-    pub(crate) selected_editor_config: usize,
+    pub(crate) show_response_panel: bool,
 }
 
 impl ApiClient {
@@ -116,7 +117,8 @@ impl ApiClient {
             scroll_handle: ScrollHandle::new(),
             theme,
             sidebar_collapsed: false,
-            selected_editor_config: 0,
+            // selected_editor_config: 0,
+            show_response_panel: false,
         };
 
         let tab = add_tab(window, cx, "get_req", "GET".to_string());
@@ -193,7 +195,7 @@ impl ApiClient {
                 ),
             )
     }
-    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_footer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_none()
             .h(px(50.0))
@@ -209,10 +211,15 @@ impl ApiClient {
                     .w_full()
                     .gap(rems(0.5))
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Ready"),
+                        Button::new("toggle-response")
+                            .ghost()
+                            .small()
+                            .icon(IconName::PanelBottom)
+                            .tooltip("Reponse")
+                            .on_click(cx.listener(|this: &mut ApiClient, _, _window, cx| {
+                                this.show_response_panel = !this.show_response_panel;
+                                cx.notify();
+                            })),
                     )
                     .child(div().flex_1())
                     .child(
@@ -221,25 +228,6 @@ impl ApiClient {
                             .child(Select::new(&self.theme).appearance(false)),
                     ),
             )
-    }
-
-    fn render_editor_config(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().w_full().child(
-            TabBar::new("request-tabs")
-                // .gap_10()
-                .with_variant(tab::TabVariant::Underline)
-                .selected_index(self.selected_editor_config)
-                .child(Tab::new().label("Params"))
-                .child(Tab::new().label("Authorization"))
-                .child(Tab::new().label("Headers"))
-                .child(Tab::new().label("Body"))
-                .child(Tab::new().label("Settings"))
-                .on_click(
-                    cx.listener(move |this: &mut ApiClient, idx: &usize, _window, cx| {
-                        this.selected_editor_config = *idx
-                    }),
-                ),
-        )
     }
 
     fn render_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -269,6 +257,103 @@ impl ApiClient {
 
 impl Render for ApiClient {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let show_response = self.show_response_panel;
+
+        let editor_content = div()
+            .size_full()
+            .min_h(px(0.)) // critical: lets this shrink instead of overflowing when response panel opens
+            .v_flex()
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex_none()
+                    .v_flex()
+                    .px(px(24.))
+                    .pt(rems(1.0))
+                    .child(self.render_editor(cx)),
+            )
+            .child(render_editor_config(self, cx))
+            .child(
+                div().flex_1().overflow_y_scrollbar().px(px(24.)).child(
+                    match self
+                        .active_tab
+                        .and_then(|id| self.tabs.iter().find(|t| t.id == id))
+                        .map(|t| t.selected_editor_config)
+                        .unwrap_or(0)
+                    {
+                        0 => query_params::render_query_params_section(self, cx).into_any_element(),
+                        _ => div().into_any_element(),
+                    },
+                ),
+            );
+
+        let response_content = div()
+            .w_full()
+            .h_full()
+            .v_flex()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_none()
+                    .px(px(24.))
+                    .py_2()
+                    .items_center()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(div().text_sm().font_semibold().child("Response"))
+                    .child(
+                        Button::new("close-response")
+                            .ghost()
+                            .tooltip("Close Response")
+                            .small()
+                            .icon(IconName::Close)
+                            .on_click(cx.listener(|this: &mut ApiClient, _, _window, cx| {
+                                this.show_response_panel = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .px(px(24.))
+                    .pt(rems(1.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("No response yet. Send a request to see results here."),
+                    ),
+            );
+
+        // Both panels must live under ONE v_resizable, or the single
+        // registered panel just expands to fill 100% of the parent
+        // instead of respecting `.size(...)`.
+        let main_content = if show_response {
+            v_resizable("editor-response-split")
+                .child(
+                    resizable_panel()
+                        .size(px(500.))
+                        .size_range(px(200.)..px(4000.))
+                        .child(editor_content),
+                )
+                .child(
+                    resizable_panel()
+                        .size(px(280.))
+                        .size_range(px(100.)..px(600.))
+                        .child(response_content),
+                )
+                .into_any_element()
+        } else {
+            editor_content.into_any_element()
+        };
+
         div()
             .size_full()
             .flex()
@@ -277,6 +362,7 @@ impl Render for ApiClient {
                 div()
                     .flex_1()
                     .h_full()
+                    .min_h(px(0.))
                     .v_flex()
                     .child(
                         div()
@@ -284,34 +370,18 @@ impl Render for ApiClient {
                             .overflow_x_hidden()
                             .child(render_tab_bar(self, cx)),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_y_scrollbar()
-                            .v_flex()
-                            .gap(rems(1.))
-                            .px(px(24.))
-                            .pt(rems(1.))
-                            .child(self.render_editor(cx))
-                            .child(self.render_editor_config(cx))
-                            .child(match self.selected_editor_config {
-                                0 => query_params::render_query_params_section(self, cx)
-                                    .into_any_element(),
-                                _ => div().into_any_element(),
-                            }),
-                    )
+                    .child(div().flex_1().min_h(px(0.)).child(main_content))
                     .child(self.render_footer(cx)),
             )
     }
 }
-
 fn main() {
     let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
 
     app.run(move |cx| {
         gpui_component::init(cx);
 
-        let theme_name = SharedString::from("Ayu Dark");
+        let theme_name = SharedString::from("Aurora Light");
         let default_theme = theme_name.clone();
         if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
             Theme::global_mut(cx).apply_config(&theme);
