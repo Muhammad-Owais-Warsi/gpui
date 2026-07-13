@@ -38,16 +38,6 @@ pub(crate) struct ApiClient {
 }
 
 impl ApiClient {
-    // fn active_tab(&self) -> Option<&Tabs> {
-    //     self.active_tab
-    //         .and_then(|id| self.tabs.iter().find(|t| t.id == id))
-    // }
-
-    // fn active_tab_mut(&mut self) -> Option<&mut Tabs> {
-    //     self.active_tab
-    //         .and_then(move |id| self.tabs.iter_mut().find(|t| t.id == id))
-    // }
-
     fn new(window: &mut Window, cx: &mut Context<Self>, default_theme: SharedString) -> Self {
         let nodes = vec![Node {
             path: "/api".into(),
@@ -280,16 +270,37 @@ impl ApiClient {
                         // Open the response panel immediately
                         if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
                             tab.show_response_panel = true;
-                            tab.response_body = None; // Optional: clear previous response
                         }
                         cx.notify();
 
                         cx.spawn(async move |this, cx| {
                             let result = http::send_get(&url).await;
 
-                            this.update(cx, |this, _cx| {
+                            this.update_in(cx, |this, window, cx| {
                                 if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
-                                    tab.response_body = result.ok();
+                                    match result {
+                                        Ok(response) => {
+                                            let formatted =
+                                                serde_json::from_str::<serde_json::Value>(
+                                                    &response,
+                                                )
+                                                .ok()
+                                                .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                                                .unwrap_or(response);
+                                            tab.response_panel.update(cx, |state, cx| {
+                                                state.set_value(formatted, window, cx);
+                                            });
+                                        }
+                                        Err(err) => {
+                                            tab.response_panel.update(cx, |state, cx| {
+                                                state.set_value(
+                                                    format!("Error: {err}"),
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    }
                                 }
                             })
                             .ok();
@@ -378,25 +389,19 @@ impl Render for ApiClient {
                             ),
                     )
                     .child({
-                        let body = self
-                            .active_tab
-                            .and_then(|id| self.tabs.iter().find(|t| t.id == id))
-                            .and_then(|t| t.response_body.as_deref())
-                            .map(|b| &b[..b.len().min(10)])
-                            .unwrap_or("No response yet");
-                        div()
-                            .w_full()
-                            .flex_1()
-                            .min_h(px(0.)) // <- also add here — this is the actual scroll region
-                            .overflow_y_scrollbar()
-                            .px(px(24.))
-                            .pt(rems(1.0))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(body.to_string()),
-                            )
+                        if let Some(response_panel_state) = self.active_tab.and_then(|id| {
+                            self.tabs
+                                .iter()
+                                .find(|t| t.id == id)
+                                .map(|tab| tab.response_panel.clone())
+                        }) {
+                            Input::new(&response_panel_state)
+                                .flex_1()
+                                .appearance(false)
+                                .into_any_element()
+                        } else {
+                            div().child("issue").into_any_element()
+                        }
                     });
                 v_resizable("editor-response-split")
                     .child(

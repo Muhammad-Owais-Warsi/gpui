@@ -2238,6 +2238,7 @@ dependencies = [
  "gpui_platform",
  "reqwest",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

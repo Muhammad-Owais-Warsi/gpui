@@ -2,7 +2,7 @@ use crate::ApiClient;
 use crate::helpers::{build_method_tag, next_id};
 use crate::query_params::QueryParams;
 use gpui::*;
-use gpui_component::input::InputState;
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::SelectState;
 use gpui_component::sidebar::SidebarToggleButton;
 use gpui_component::tab::{Tab, TabBar};
@@ -18,8 +18,8 @@ pub struct Tabs {
     pub(crate) pending: bool,
     pub(crate) dirty: bool,
     pub(crate) selected_editor_config: usize,
+    pub(crate) response_panel: Entity<InputState>,
     pub(crate) show_response_panel: bool,
-    pub(crate) response_body: Option<String>,
 }
 
 pub fn add_tab(
@@ -48,6 +48,29 @@ pub fn add_tab(
         )
     });
 
+    let response_panel_state = cx.new(|cx| {
+        InputState::new(window, cx)
+            .code_editor("json")
+            .line_number(false)
+            .searchable(true)
+            .show_whitespaces(true)
+            .default_value("")
+    });
+
+    cx.subscribe_in(
+        &url,
+        window,
+        move |this: &mut ApiClient, _, event, _window, cx| {
+            if let InputEvent::Change = event {
+                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
+                    tab.dirty = true;
+                    cx.notify();
+                }
+            }
+        },
+    )
+    .detach();
+
     Tabs {
         id,
         name: name.into(),
@@ -58,8 +81,8 @@ pub fn add_tab(
         pending: false,
         dirty: false,
         selected_editor_config: 0,
+        response_panel: response_panel_state,
         show_response_panel: false,
-        response_body: None,
     }
 }
 
