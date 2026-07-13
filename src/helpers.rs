@@ -1,3 +1,4 @@
+use crate::Node;
 use gpui::*;
 use gpui_component::tag::Tag;
 use gpui_component::{ColorName, Sizable};
@@ -44,4 +45,74 @@ pub fn build_method_tag(method: &str) -> impl IntoElement {
 pub fn next_id() -> usize {
     static COUNTER: AtomicUsize = AtomicUsize::new(1);
     COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+pub fn find_node_mut<'a>(nodes: &'a mut [Node], path: &str) -> Option<&'a mut Node> {
+    for node in nodes.iter_mut() {
+        if node.path == path {
+            return Some(node);
+        }
+        if let Some(found) = find_node_mut(&mut node.children, path) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+pub fn update_node_method(nodes: &mut [Node], path: &str, method: &str) -> bool {
+    for node in nodes.iter_mut() {
+        if node.path == path {
+            node.method = method.to_string();
+            return true;
+        }
+        if update_node_method(&mut node.children, path, method) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn read_request_method(path: &std::path::Path) -> String {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return String::new();
+    };
+    value
+        .get("method")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_uppercase()
+}
+
+pub fn read_dir_to_nodes(dir: &std::path::Path) -> Vec<Node> {
+    let mut entries: Vec<Node> = Vec::new();
+    let Ok(raw) = std::fs::read_dir(dir) else {
+        return entries;
+    };
+    for entry in raw.flatten() {
+        let file_type = entry.file_type().ok();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path();
+
+        if file_type.map_or(false, |ft| ft.is_dir()) {
+            entries.push(Node {
+                path: path.to_string_lossy().to_string(),
+                name: name.clone(),
+                method: String::new(),
+                is_file: false,
+                children: read_dir_to_nodes(&path),
+            });
+        } else if file_type.map_or(false, |ft| ft.is_file()) {
+            entries.push(Node {
+                path: path.to_string_lossy().to_string(),
+                name,
+                method: read_request_method(&path),
+                is_file: true,
+                children: vec![],
+            });
+        }
+    }
+    entries
 }

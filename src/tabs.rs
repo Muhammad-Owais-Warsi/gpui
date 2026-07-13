@@ -1,9 +1,9 @@
 use crate::ApiClient;
-use crate::helpers::{build_method_tag, next_id};
+use crate::helpers::{build_method_tag, next_id, update_node_method};
 use crate::query_params::QueryParams;
 use gpui::*;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::select::SelectState;
+use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::sidebar::SidebarToggleButton;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, button::*, *};
@@ -66,6 +66,29 @@ pub fn add_tab(
                     tab.dirty = true;
                     cx.notify();
                 }
+            }
+        },
+    )
+    .detach();
+
+    cx.subscribe_in(
+        &method,
+        window,
+        move |this: &mut ApiClient, _, event, _window, cx| {
+            if let SelectEvent::Confirm(Some(new_method)) = event {
+                let new_method = new_method.clone();
+                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
+                    tab.dirty = true;
+                    let path = tab.path.clone();
+                    if !path.is_empty() {
+                        for ws in this.workspaces.iter_mut() {
+                            if update_node_method(&mut ws.nodes, &path, &new_method) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                cx.notify();
             }
         },
     )
@@ -137,7 +160,7 @@ pub fn render_new_tab_button(_api: &ApiClient, cx: &mut Context<ApiClient>) -> i
                 .icon(IconName::Plus)
                 .tooltip("Add Tab")
                 .on_click(cx.listener(|this: &mut ApiClient, _event, window, cx| {
-                    let tab = add_tab(window, cx, "new", "GET".to_string());
+                    let tab = add_tab(window, cx, "Untitled", "GET".to_string());
                     this.active_tab = Some(tab.id);
                     this.tabs.push(tab);
                     cx.notify();

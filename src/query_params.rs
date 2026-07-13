@@ -5,11 +5,63 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_component::{IconName, Sizable, h_flex, v_flex};
+use serde::Serialize;
 
 pub struct QueryParams {
     pub key: Entity<InputState>,
     pub value: Entity<InputState>,
     pub active: bool,
+}
+
+fn build_query_param_entity(
+    window: &mut Window,
+    cx: &mut Context<ApiClient>,
+    tab_id: usize,
+    key: &str,
+    value: &str,
+    active: bool,
+) -> Entity<QueryParams> {
+    let key_input_state = cx.new(|cx| InputState::new(window, cx).default_value(key));
+    let key_input_state_sub = key_input_state.clone();
+
+    let value_input_state = cx.new(|cx| InputState::new(window, cx).default_value(value));
+    let value_input_state_sub = value_input_state.clone();
+
+    let qp = cx.new(|_cx| QueryParams {
+        key: key_input_state,
+        value: value_input_state,
+        active,
+    });
+
+    cx.subscribe_in(
+        &key_input_state_sub,
+        window,
+        move |this: &mut ApiClient, _, event, _window, cx| {
+            if let InputEvent::Change = event {
+                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.dirty = true;
+                    cx.notify();
+                }
+            }
+        },
+    )
+    .detach();
+
+    cx.subscribe_in(
+        &value_input_state_sub,
+        window,
+        move |this: &mut ApiClient, _, event, _window, cx| {
+            if let InputEvent::Change = event {
+                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
+                    tab.dirty = true;
+                    cx.notify();
+                }
+            }
+        },
+    )
+    .detach();
+
+    qp
 }
 
 fn new_query_param(
@@ -18,52 +70,33 @@ fn new_query_param(
     cx: &mut Context<ApiClient>,
     tab_id: usize,
 ) {
-    let key_input_state = cx.new(|cx| InputState::new(window, cx));
-
-    let key_input_state_sub = key_input_state.clone();
-
-    let value_input_state = cx.new(|cx| InputState::new(window, cx));
-    let value_input_state_sub = value_input_state.clone();
-
-    let qp = cx.new(|_cx| QueryParams {
-        key: key_input_state,
-        value: value_input_state,
-        active: true,
-    });
-
-    let tab_id_for_key = tab_id;
-    cx.subscribe_in(
-        &key_input_state_sub,
-        window,
-        move |this: &mut ApiClient, _, event, _window, cx| {
-            if let InputEvent::Change = event {
-                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id_for_key) {
-                    tab.dirty = true;
-                    cx.notify();
-                }
-            }
-        },
-    )
-    .detach();
-
-    let tab_id_for_key = tab_id;
-    cx.subscribe_in(
-        &value_input_state_sub,
-        window,
-        move |this: &mut ApiClient, _, event, _window, cx| {
-            if let InputEvent::Change = event {
-                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id_for_key) {
-                    tab.dirty = true;
-                    cx.notify();
-                }
-            }
-        },
-    )
-    .detach();
+    let qp = build_query_param_entity(window, cx, tab_id, "", "", true);
 
     if let Some(tab) = api.tabs.iter_mut().find(|t| t.id == tab_id) {
         tab.query_params.push(qp);
     }
+}
+
+/// we can change the name of this method.
+pub fn query_params_from_json(
+    window: &mut Window,
+    cx: &mut Context<ApiClient>,
+    tab_id: usize,
+    value: &serde_json::Value,
+) -> Vec<Entity<QueryParams>> {
+    let Some(items) = value.get("query_params").and_then(|v| v.as_array()) else {
+        return vec![];
+    };
+
+    items
+        .iter()
+        .map(|item| {
+            let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            let active = item.get("active").and_then(|v| v.as_bool()).unwrap_or(true);
+            build_query_param_entity(window, cx, tab_id, key, value, active)
+        })
+        .collect()
 }
 
 pub fn render_query_params_section(
