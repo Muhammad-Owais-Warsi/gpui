@@ -110,7 +110,7 @@ impl ApiClient {
         }
     }
 
-    fn render_node(&self, node: &Node, cx: &mut Context<Self>) -> SidebarMenuItem {
+    fn render_node(&self, node: &Node, cx: &mut Context<Self>,  active_path: Option<&String>) -> SidebarMenuItem {
         let is_file = node.is_file;
         let name = node.name.clone();
         let method = node.method.clone();
@@ -120,15 +120,6 @@ impl ApiClient {
         let name_for_click = name.clone();
         let path_for_click = node.path.clone();
 
-        let is_active = self
-            .active_tab
-            .and_then(|id| {
-                self.tabs
-                    .iter()
-                    .find(|t| t.id == id)
-                    .map(|tab| tab.path == node.path.clone())
-            })
-            .unwrap_or(false);
 
         let mut item = SidebarMenuItem::new(name.clone())
             .suffix(move |_, _| {
@@ -138,14 +129,9 @@ impl ApiClient {
                     div()
                 }
             })
-            .active(is_active);
+            .active(active_path == Some(&node.path));
 
-        // .context_menu(|menu, window, cx| {
-        //     menu.menu("Copy", Box::new(Dummy))
-        //         .menu("Paste", Box::new(Dummy))
-        //         .separator()
-        //         .menu("Delete", Box::new(Dummy))
-        // });
+
 
         if !is_file {
             let parent = node.path.clone();
@@ -193,7 +179,7 @@ impl ApiClient {
             let mut children = Vec::new();
 
             for child in &node.children {
-                children.push(self.render_node(child, cx));
+                children.push(self.render_node(child, cx, active_path));
             }
 
             item.children(children)
@@ -201,19 +187,12 @@ impl ApiClient {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+
+        let active_path = self.active_tab.and_then(|id| self.tabs.iter().find(|t| t.id == id).map(|tab| &tab.path));
+
         Sidebar::new("api-sidebar")
             .collapsible(SidebarCollapsible::Icon)
             .collapsed(self.sidebar_collapsed)
-            // .header(
-            //     SidebarHeader::new().child(
-            //         h_flex()
-            //             .gap(rems(0.75))
-            //             .child(IconName::Palette)
-            //             .when(!icon_collapsed, |this| {
-            //                 this.child(div().flex_1().child("workspace"))
-            //             }),
-            //     ),
-            // )
             .children(
                 self.workspaces
                     .iter()
@@ -224,7 +203,7 @@ impl ApiClient {
                             SidebarMenu::new().children(
                                 ws.nodes
                                     .iter()
-                                    .map(|child| Self::render_node(self, child, cx)),
+                                    .map(|child| Self::render_node(self, child, cx, active_path)),
                             ),
                         )
                     }),
