@@ -8,6 +8,7 @@ use gpui_component::sidebar::SidebarToggleButton;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, button::*, *};
 
+#[derive(Clone)]
 pub struct Tabs {
     pub(crate) id: usize,
     pub(crate) name: String,
@@ -27,7 +28,7 @@ pub fn add_tab(
     cx: &mut Context<ApiClient>,
     name: &str,
     method: String,
-) -> Tabs {
+) -> Entity<Tabs> {
     let id = next_id();
     let url = cx.new(|cx| InputState::new(window, cx).placeholder("Enter URL..."));
     let methods: Vec<String> = vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
@@ -57,64 +58,74 @@ pub fn add_tab(
             .default_value("")
     });
 
-    cx.subscribe_in(
-        &url,
-        window,
-        move |this: &mut ApiClient, _, event, _window, cx| {
-            if let InputEvent::Change = event {
-                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
-                    tab.dirty = true;
-                    cx.notify();
-                }
-            }
-        },
-    )
-    .detach();
-
-    cx.subscribe_in(
-        &method,
-        window,
-        move |this: &mut ApiClient, _, event, _window, cx| {
-            if let SelectEvent::Confirm(Some(new_method)) = event {
-                let new_method = new_method.clone();
-                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == id) {
-                    tab.dirty = true;
-                    let path = tab.path.clone();
-                    if !path.is_empty() {
-                        for ws in this.workspaces.iter_mut() {
-                            if update_node_method(&mut ws.nodes, &path, &new_method) {
-                                break;
-                            }
-                        }
-                    }
-                }
-                cx.notify();
-            }
-        },
-    )
-    .detach();
-
-    Tabs {
+    let tab = Tabs {
         id,
         name: name.into(),
         path: String::new(),
-        method,
-        url,
+        method: method.clone(),
+        url:url.clone(),
         query_params: vec![],
         pending: false,
         dirty: false,
         selected_editor_config: 0,
         response_panel: response_panel_state,
         show_response_panel: false,
-    }
+    };
+
+    let tab_entity = cx.new(|_cx| {
+        tab.clone()
+    });
+
+    let url_tab_clone = tab_entity.clone();
+    cx.subscribe_in(
+        &url,
+        window,
+        move |_this: &mut ApiClient, _, event, _window, cx| {
+            if let InputEvent::Change = event {
+                url_tab_clone.update(cx, |tab, cx| {
+                    tab.dirty = true;
+                    cx.notify();
+                })
+            }
+        },
+    )
+    .detach();
+
+    let method_tab_clone = tab_entity.clone();
+    cx.subscribe_in(
+        &method,
+        window,
+        move |this: &mut ApiClient, _, event, _window, cx| {
+            if let SelectEvent::Confirm(Some(new_method)) = event {
+                let new_method = new_method.clone();
+
+                method_tab_clone.update(cx, |tab, cx| {
+                    tab.dirty = true;
+
+                    let path = tab.path.clone();
+
+                    if !path.is_empty() {
+                        for ws in &mut this.workspaces {
+                            if update_node_method(&mut ws.nodes, &path, &new_method) {
+                                break;
+                            }
+                        }
+                    }
+
+                    cx.notify();
+                });
+            }
+        },
+    )
+    .detach();
+
+    tab_entity
 }
 
 pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {
-    let selected = api
-        .active_tab
-        .and_then(|id| api.tabs.iter().find(|t| t.id == id))
-        .map(|t| t.selected_editor_config)
-        .unwrap_or(0);
+
+     let selected = api.active_tab.as_ref().map(|tab| tab.read(cx).selected_editor_config).unwrap_or(0);
+
 
     div()
         .w_full()
@@ -125,7 +136,7 @@ pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) ->
                 TabBar::new("request-tabs")
                     .w_full()
                     .with_variant(tab::TabVariant::Underline)
-                    .selected_index(selected)
+                    .selected_index(selected.clone())
                     .child(Tab::new().label("Params"))
                     .child(Tab::new().label("Authorization"))
                     .child(Tab::new().label("Headers"))
@@ -133,13 +144,11 @@ pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) ->
                     .child(Tab::new().label("Settings"))
                     .on_click(cx.listener(
                         move |this: &mut ApiClient, idx: &usize, _window, cx| {
-                            if let Some(tab) = this
-                                .active_tab
-                                .and_then(|id| this.tabs.iter_mut().find(|t| t.id == id))
-                            {
-                                tab.selected_editor_config = *idx;
-                            }
-
+                            if let Some(tab) = this.active_tab.as_ref() {
+                                        tab.update(cx, |tab, _cx| {
+                                            tab.selected_editor_config = *idx;
+                                        });
+                                    }
                             cx.notify();
                         },
                     )),
@@ -161,16 +170,20 @@ pub fn render_new_tab_button(_api: &ApiClient, cx: &mut Context<ApiClient>) -> i
                 .tooltip("Add Tab")
                 .on_click(cx.listener(|this: &mut ApiClient, _event, window, cx| {
                     let tab = add_tab(window, cx, "Untitled", "GET".to_string());
-                    this.active_tab = Some(tab.id);
+                    this.active_tab = Some(tab.clone());
                     this.tabs.push(tab);
                     cx.notify();
                 })),
         )
 }
 
-pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: &Tabs) -> Tab {
+pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: Entity<Tabs>) -> Tab {
+
+    let tab_to_close = tab.clone();
+    let tab = tab.read(cx);
     let id = tab.id;
     let name = tab.name.clone();
+
 
     let method = tab
         .method
@@ -190,8 +203,8 @@ pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: &Tabs) -> 
                 .icon(IconName::Close)
                 .on_click(
                     cx.listener(move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
-                        this.tabs.retain(|t| t.id != id);
-                        this.active_tab = this.tabs.last().map(|t| t.id);
+                        this.tabs.retain(|t| t != &tab_to_close);
+                        this.active_tab = this.tabs.last().cloned();
                         cx.notify();
                     }),
                 ),
@@ -199,10 +212,10 @@ pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: &Tabs) -> 
 }
 
 pub fn render_tab_bar(api: &ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {
-    let selected = api
-        .active_tab
-        .and_then(|id| api.tabs.iter().position(|t| t.id == id))
-        .unwrap_or(0);
+
+    let selected = api.active_tab.as_ref().and_then(|active| {
+        api.tabs.iter().position(|tab| tab == active)
+    }).unwrap_or(0);
 
     let sidebar_collapsed = api.sidebar_collapsed;
 
@@ -222,12 +235,15 @@ pub fn render_tab_bar(api: &ApiClient, cx: &mut Context<ApiClient>) -> impl Into
         .on_click(
             cx.listener(move |this: &mut ApiClient, idx: &usize, _window, cx| {
                 if let Some(tab) = this.tabs.get(*idx) {
-                    this.active_tab = Some(tab.id);
+                    this.active_tab = Some(tab.clone());
                     cx.notify();
                 }
+
             }),
         )
         .track_scroll(&api.scroll_handle)
         .suffix(render_new_tab_button(api, cx))
-        .children(api.tabs.iter().map(|tab| render_tab(&api, cx, tab)))
+        .children(api.tabs.iter().map(|tab| {
+            render_tab(&api, cx, tab.clone())
+        }))
 }

@@ -1,4 +1,5 @@
 use crate::ApiClient;
+use crate::tabs::Tabs;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
@@ -16,7 +17,7 @@ pub struct QueryParams {
 fn build_query_param_entity(
     window: &mut Window,
     cx: &mut Context<ApiClient>,
-    tab_id: usize,
+    tab: Entity<Tabs>,
     key: &str,
     value: &str,
     active: bool,
@@ -33,29 +34,33 @@ fn build_query_param_entity(
         active,
     });
 
+    let key_tab = tab.clone();
     cx.subscribe_in(
         &key_input_state_sub,
         window,
         move |this: &mut ApiClient, _, event, _window, cx| {
             if let InputEvent::Change = event {
-                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
+
+                key_tab.update(cx, |tab, cx| {
                     tab.dirty = true;
                     cx.notify();
-                }
+                })
             }
         },
     )
     .detach();
+
+    let value_tab = tab.clone();
 
     cx.subscribe_in(
         &value_input_state_sub,
         window,
         move |this: &mut ApiClient, _, event, _window, cx| {
             if let InputEvent::Change = event {
-                if let Some(tab) = this.tabs.iter_mut().find(|t| t.id == tab_id) {
+                value_tab.update(cx, |tab, cx| {
                     tab.dirty = true;
                     cx.notify();
-                }
+                })
             }
         },
     )
@@ -65,23 +70,23 @@ fn build_query_param_entity(
 }
 
 fn new_query_param(
-    api: &mut ApiClient,
+    _api: &mut ApiClient,
     window: &mut Window,
     cx: &mut Context<ApiClient>,
-    tab_id: usize,
+    tab: Entity<Tabs>,
 ) {
-    let qp = build_query_param_entity(window, cx, tab_id, "", "", true);
+    let qp = build_query_param_entity(window, cx, tab.clone(), "", "", true);
 
-    if let Some(tab) = api.tabs.iter_mut().find(|t| t.id == tab_id) {
+    tab.update(cx, |tab, _cx| {
         tab.query_params.push(qp);
-    }
+    });
 }
 
 /// we can change the name of this method.
 pub fn query_params_from_json(
     window: &mut Window,
     cx: &mut Context<ApiClient>,
-    tab_id: usize,
+    tab: Entity<Tabs>,
     value: &serde_json::Value,
 ) -> Vec<Entity<QueryParams>> {
     let Some(items) = value.get("query_params").and_then(|v| v.as_array()) else {
@@ -94,7 +99,7 @@ pub fn query_params_from_json(
             let key = item.get("key").and_then(|v| v.as_str()).unwrap_or("");
             let value = item.get("value").and_then(|v| v.as_str()).unwrap_or("");
             let active = item.get("active").and_then(|v| v.as_bool()).unwrap_or(true);
-            build_query_param_entity(window, cx, tab_id, key, value, active)
+            build_query_param_entity(window, cx, tab.clone(), key, value, active)
         })
         .collect()
 }
@@ -103,13 +108,10 @@ pub fn render_query_params_section(
     api: &mut ApiClient,
     cx: &mut Context<ApiClient>,
 ) -> impl IntoElement {
-    let Some(tab) = api
-        .active_tab
-        .and_then(|id| api.tabs.iter().find(|t| t.id == id))
-    else {
+    let Some(tab) = api.active_tab.as_ref() else {
         return div();
     };
-    let tab_id = tab.id;
+    let tab_entity = tab.clone();
 
     v_flex()
         .gap(rems(0.75))
@@ -126,7 +128,7 @@ pub fn render_query_params_section(
                         .ghost()
                         .on_click(
                             cx.listener(move |this: &mut ApiClient, _event, window, cx| {
-                                new_query_param(this, window, cx, tab_id);
+                                new_query_param(this, window, cx, tab_entity.clone());
                                 cx.notify();
                             }),
                         ),
@@ -144,7 +146,7 @@ pub fn render_query_params_section(
                     ),
                 )
                 .child(
-                    TableBody::new().children(tab.query_params.iter().enumerate().map(
+                    TableBody::new().children(tab.read(cx).query_params.iter().enumerate().map(
                         |(i, entity)| {
                             let entity = entity.clone();
                             let (key, value, active) = {
@@ -174,16 +176,16 @@ pub fn render_query_params_section(
                                             .icon(IconName::Delete)
                                             .on_click({
                                                 let entity = entity.clone();
-                                                cx.listener(move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
-                                                    if let Some(target_tab) =
-                                                        this.tabs.iter_mut().find(|t| t.id == tab_id)
-                                                    {
-                                                        target_tab
-                                                            .query_params
-                                                            .retain(|q| q.entity_id() != entity.entity_id());
-                                                    }
-                                                    cx.notify();
-                                                })
+                                                let tab = tab.clone();
+
+                                                    cx.listener(move |_this: &mut ApiClient, _: &ClickEvent, _window, cx| {
+                                                        tab.update(cx, |tab, _cx| {
+                                                            tab.query_params
+                                                                .retain(|q| q.entity_id() != entity.entity_id());
+                                                        });
+
+                                                        cx.notify();
+                                                    })
                                             }),
                                     ),
                                 )
