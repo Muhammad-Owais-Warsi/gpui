@@ -42,9 +42,9 @@ pub struct Node {
 
 pub(crate) struct ApiClient {
     pub(crate) workspaces: Vec<Workspace>,
-    pub(crate) selected_workspace: Workspace,
+    pub(crate) selected_workspace: String,
     pub(crate) tabs: Vec<Entity<Tabs>>,
-    pub(crate) active_tab: Option<Entity<Tabs>>,
+    pub(crate) active_tab_index: Option<usize>,
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) theme: Entity<SelectState<Vec<SharedString>>>,
     pub(crate) sidebar_collapsed: bool,
@@ -97,13 +97,13 @@ impl ApiClient {
             nodes: read_dir_to_nodes(&workspace_path),
         };
 
-        let selected_workspace = workspace.clone();
+        // let selected_workspace = workspace.clone();
 
         Self {
             workspaces: vec![workspace],
-            selected_workspace, // for now hardcoded
+            selected_workspace: workspace_path.to_string_lossy().to_string(), // for now hardcoded
             tabs: Vec::new(),
-            active_tab: None,
+            active_tab_index: None,
             scroll_handle: ScrollHandle::new(),
             theme,
             sidebar_collapsed: false,
@@ -150,10 +150,9 @@ impl ApiClient {
         if is_file {
             item = item.on_click(
                 cx.listener(move |this: &mut ApiClient, _event, window, cx| {
-                    if let Some(existing) =
-                        this.tabs.iter().find(|t| t.read(cx).path == path_for_click)
+                    if let Some(idx) = this.tabs.iter().position(|t| t.read(cx).path == path_for_click)
                     {
-                        this.active_tab = Some(existing.clone());
+                        this.active_tab_index = Some(idx);
                         cx.notify();
                         return;
                     }
@@ -182,8 +181,8 @@ impl ApiClient {
                         }
                     }
 
-                    this.tabs.push(tab.clone());
-                    this.active_tab = Some(tab);
+                    this.tabs.push(tab);
+                    this.active_tab_index = Some(this.tabs.len() - 1);
                     cx.notify();
                 }),
             );
@@ -203,7 +202,9 @@ impl ApiClient {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_path = self.active_tab.as_ref().map(|t| t.read(cx).path.clone());
+        let active_path = self.active_tab_index
+            .and_then(|i| self.tabs.get(i))
+            .map(|t| t.read(cx).path.clone());
 
         Sidebar::new("api-sidebar")
             .collapsible(SidebarCollapsible::Icon)
@@ -211,7 +212,7 @@ impl ApiClient {
             .children(
                 self.workspaces
                     .iter()
-                    .find(|ws| ws.path == self.selected_workspace.path)
+                    .find(|ws| ws.path == self.selected_workspace)
                     .into_iter()
                     .map(|ws| {
                         SidebarGroup::new(&ws.name).child(SidebarMenu::new().children(
@@ -224,7 +225,7 @@ impl ApiClient {
     }
 
     fn render_footer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_active_tab = if self.tabs.len() == 0 { false } else { true };
+        let is_active_tab = !self.tabs.is_empty();
 
         div()
             .flex_none()
@@ -244,8 +245,8 @@ impl ApiClient {
                         .icon(IconName::PanelBottom)
                         .tooltip("Response")
                         .on_click(cx.listener(|this: &mut ApiClient, _, _window, cx| {
-                            if let Some(tab) = this.active_tab.as_ref() {
-                                tab.update(cx, |tab, cx| {
+                            if let Some(tab) = this.active_tab_index.and_then(|i| this.tabs.get(i)) {
+                                tab.update(cx, |tab, _cx| {
                                     tab.show_response_panel = !tab.show_response_panel;
                                 })
                             }
@@ -264,7 +265,7 @@ impl ApiClient {
     }
 
     fn render_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(tab) = self.active_tab.as_ref() else {
+        let Some(tab) = self.active_tab_index.and_then(|i| self.tabs.get(i)) else {
             return div().child("No tab open");
         };
 
@@ -297,7 +298,7 @@ impl ApiClient {
                 cx.listener(move |this: &mut ApiClient, _, _window, cx| {
                     let url = url.read(cx).value().to_string();
 
-                    if let Some(tab) = this.active_tab.as_ref() {
+                    if let Some(tab) = this.active_tab_index.and_then(|i| this.tabs.get(i)) {
                         tab.update(cx, |tab, _cx| {
                             tab.show_response_panel = true;
                         });
@@ -335,14 +336,12 @@ impl ApiClient {
 
 impl Render for ApiClient {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // let active_tab = self.active_tab.as_ref();
-        let show_response = self
-            .active_tab
-            .as_ref()
+        let has_tab = self.active_tab_index.is_some();
+
+        let show_response = self.active_tab_index
+            .and_then(|i| self.tabs.get(i))
             .map(|t| t.read(cx).show_response_panel)
             .unwrap_or(false);
-
-        let has_tab = self.active_tab.is_some();
 
         let main_content = if has_tab {
             let editor_content = div()
@@ -362,8 +361,8 @@ impl Render for ApiClient {
                 .child(
                     div().flex_1().overflow_y_scrollbar().px(px(24.)).child(
                         match self
-                            .active_tab
-                            .as_ref()
+                            .active_tab_index
+                            .and_then(|i| self.tabs.get(i))
                             .map(|tab| tab.read(cx).selected_editor_config)
                             .unwrap_or(0)
                         {
@@ -401,8 +400,8 @@ impl Render for ApiClient {
                                     .icon(IconName::Close)
                                     .on_click(cx.listener(
                                         |this: &mut ApiClient, _, _window, cx| {
-                                            if let Some(tab) = this.active_tab.as_ref() {
-                                                tab.update(cx, |tab, cx| {
+                                            if let Some(tab) = this.active_tab_index.and_then(|i| this.tabs.get(i)) {
+                                                tab.update(cx, |tab, _cx| {
                                                     tab.show_response_panel = false;
                                                 })
                                             }
@@ -413,8 +412,8 @@ impl Render for ApiClient {
                     )
                     .child({
                         if let Some(response_panel_state) = self
-                            .active_tab
-                            .as_ref()
+                            .active_tab_index
+                            .and_then(|i| self.tabs.get(i))
                             .map(|t| t.read(cx).response_panel.clone())
                         {
                             Input::new(&response_panel_state)

@@ -63,7 +63,7 @@ pub fn add_tab(
         name: name.into(),
         path: String::new(),
         method: method.clone(),
-        url:url.clone(),
+        url: url.clone(),
         query_params: vec![],
         pending: false,
         dirty: false,
@@ -72,9 +72,7 @@ pub fn add_tab(
         show_response_panel: false,
     };
 
-    let tab_entity = cx.new(|_cx| {
-        tab.clone()
-    });
+    let tab_entity = cx.new(|_cx| tab);
 
     let url_tab_clone = tab_entity.clone();
     cx.subscribe_in(
@@ -123,9 +121,11 @@ pub fn add_tab(
 }
 
 pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {
-
-     let selected = api.active_tab.as_ref().map(|tab| tab.read(cx).selected_editor_config).unwrap_or(0);
-
+    let selected = api
+        .active_tab_index
+        .and_then(|i| api.tabs.get(i))
+        .map(|tab| tab.read(cx).selected_editor_config)
+        .unwrap_or(0);
 
     div()
         .w_full()
@@ -144,11 +144,12 @@ pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) ->
                     .child(Tab::new().label("Settings"))
                     .on_click(cx.listener(
                         move |this: &mut ApiClient, idx: &usize, _window, cx| {
-                            if let Some(tab) = this.active_tab.as_ref() {
-                                        tab.update(cx, |tab, _cx| {
-                                            tab.selected_editor_config = *idx;
-                                        });
-                                    }
+                            if let Some(tab) = this.active_tab_index.and_then(|i| this.tabs.get(i))
+                            {
+                                tab.update(cx, |tab, _cx| {
+                                    tab.selected_editor_config = *idx;
+                                });
+                            }
                             cx.notify();
                         },
                     )),
@@ -170,22 +171,20 @@ pub fn render_new_tab_button(_api: &ApiClient, cx: &mut Context<ApiClient>) -> i
                 .tooltip("Add Tab")
                 .on_click(cx.listener(|this: &mut ApiClient, _event, window, cx| {
                     let tab = add_tab(window, cx, "Untitled", "GET".to_string());
-                    this.active_tab = Some(tab.clone());
                     this.tabs.push(tab);
+                    this.active_tab_index = Some(this.tabs.len() - 1);
                     cx.notify();
                 })),
         )
 }
 
-pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: Entity<Tabs>) -> Tab {
-
+pub fn render_tab(api: &ApiClient, cx: &mut Context<ApiClient>, tab: Entity<Tabs>) -> Tab {
     let tab_to_close = tab.clone();
-    let tab = tab.read(cx);
-    let id = tab.id;
-    let name = tab.name.clone();
+    let tab_state = tab.read(cx);
+    let id = tab_state.id;
+    let name = tab_state.name.clone();
 
-
-    let method = tab
+    let method = tab_state
         .method
         .read(cx)
         .selected_value()
@@ -204,7 +203,7 @@ pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: Entity<Tab
                 .on_click(
                     cx.listener(move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
                         this.tabs.retain(|t| t != &tab_to_close);
-                        this.active_tab = this.tabs.last().cloned();
+                        this.active_tab_index = Some(this.tabs.len() - 1);
                         cx.notify();
                     }),
                 ),
@@ -212,15 +211,12 @@ pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: Entity<Tab
 }
 
 pub fn render_tab_bar(api: &ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {
-
-    let selected = api.active_tab.as_ref().and_then(|active| {
-        api.tabs.iter().position(|tab| tab == active)
-    }).unwrap_or(0);
+    let selected = api.active_tab_index.unwrap_or(0);
 
     let sidebar_collapsed = api.sidebar_collapsed;
 
     TabBar::new("tabs")
-        .min_h(px(32.)) // floor height, doesn't clip taller Tab content when tabs exist
+        .min_h(px(32.))
         .prefix(
             h_flex().px(px(8.)).items_center().child(
                 SidebarToggleButton::new()
@@ -234,16 +230,13 @@ pub fn render_tab_bar(api: &ApiClient, cx: &mut Context<ApiClient>) -> impl Into
         .selected_index(selected)
         .on_click(
             cx.listener(move |this: &mut ApiClient, idx: &usize, _window, cx| {
-                if let Some(tab) = this.tabs.get(*idx) {
-                    this.active_tab = Some(tab.clone());
+                if *idx < this.tabs.len() {
+                    this.active_tab_index = Some(*idx);
                     cx.notify();
                 }
-
             }),
         )
         .track_scroll(&api.scroll_handle)
         .suffix(render_new_tab_button(api, cx))
-        .children(api.tabs.iter().map(|tab| {
-            render_tab(&api, cx, tab.clone())
-        }))
+        .children(api.tabs.iter().map(|tab| render_tab(api, cx, tab.clone())))
 }

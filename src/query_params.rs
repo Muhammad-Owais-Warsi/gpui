@@ -40,7 +40,6 @@ fn build_query_param_entity(
         window,
         move |this: &mut ApiClient, _, event, _window, cx| {
             if let InputEvent::Change = event {
-
                 key_tab.update(cx, |tab, cx| {
                     tab.dirty = true;
                     cx.notify();
@@ -108,10 +107,9 @@ pub fn render_query_params_section(
     api: &mut ApiClient,
     cx: &mut Context<ApiClient>,
 ) -> impl IntoElement {
-    let Some(tab) = api.active_tab.as_ref() else {
+    let Some(tab) = api.active_tab_index.and_then(|i| api.tabs.get(i)).cloned() else {
         return div();
     };
-    let tab_entity = tab.clone();
 
     v_flex()
         .gap(rems(0.75))
@@ -126,12 +124,13 @@ pub fn render_query_params_section(
                         .icon(IconName::Plus)
                         .tooltip("Add Query Param")
                         .ghost()
-                        .on_click(
+                        .on_click({
+                            let tab = tab.clone();
                             cx.listener(move |this: &mut ApiClient, _event, window, cx| {
-                                new_query_param(this, window, cx, tab_entity.clone());
+                                new_query_param(this, window, cx, tab.clone());
                                 cx.notify();
-                            }),
-                        ),
+                            })
+                        }),
                 ),
         )
         .child(

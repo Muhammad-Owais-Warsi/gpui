@@ -15,7 +15,7 @@ impl ApiClient {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let workspace_path = self.selected_workspace.path.clone();
+        let workspace_path = self.selected_workspace.clone();
 
         match crate::fs::create_file("new", &action.parent) {
             Ok(path) => {
