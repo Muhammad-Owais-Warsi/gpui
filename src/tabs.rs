@@ -1,130 +1,63 @@
 use crate::ApiClient;
-use crate::helpers::{build_method_tag, next_id, update_node_method};
-use crate::query_params::QueryParams;
+use crate::helpers::build_method_tag;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::InputEvent;
 use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::sidebar::SidebarToggleButton;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme as _, button::*, *};
 
-#[derive(Clone)]
-pub struct Tabs {
-    pub(crate) id: usize,
-    pub(crate) name: String,
-    pub(crate) path: String,
-    pub(crate) method: Entity<SelectState<Vec<String>>>,
-    pub(crate) url: Entity<InputState>,
-    pub(crate) query_params: Vec<Entity<QueryParams>>,
-    pub(crate) pending: bool,
-    pub(crate) dirty: bool,
-    pub(crate) selected_editor_config: usize,
-    pub(crate) response_panel: Entity<InputState>,
-    pub(crate) show_response_panel: bool,
-}
-
-pub fn add_tab(
-    window: &mut Window,
-    cx: &mut Context<ApiClient>,
-    name: &str,
-    method: String,
-) -> Entity<Tabs> {
-    let id = next_id();
-    let url = cx.new(|cx| InputState::new(window, cx).placeholder("Enter URL..."));
+pub fn new_tab(window: &mut Window, cx: &mut Context<ApiClient>) -> Entity<crate::Node> {
+    let name_entity =
+        cx.new(|cx| gpui_component::input::InputState::new(window, cx).default_value("Untitled"));
+    let url =
+        cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("Enter URL..."));
     let methods: Vec<String> = vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
         .into_iter()
         .map(String::from)
         .collect();
-    let selected_method = methods.iter().position(|m| *m == method).unwrap_or(0);
     let method = cx.new(|cx| {
         SelectState::new(
             methods,
             Some(IndexPath {
                 section: 0,
-                row: selected_method,
+                row: 0,
                 column: 0,
             }),
             window,
             cx,
         )
     });
-
-    let response_panel_state = cx.new(|cx| {
-        InputState::new(window, cx)
+    let response_panel = cx.new(|cx| {
+        gpui_component::input::InputState::new(window, cx)
             .code_editor("json")
             .line_number(true)
-            // .searchable(true)
-            // .show_whitespaces(true)
             .default_value("")
     });
 
-    let tab = Tabs {
-        id,
-        name: name.into(),
+    cx.new(|cx| crate::Node {
+        name: name_entity,
         path: String::new(),
-        method: method.clone(),
-        url: url.clone(),
-        query_params: vec![],
-        pending: false,
-        dirty: false,
-        selected_editor_config: 0,
-        response_panel: response_panel_state,
-        show_response_panel: false,
-    };
-
-    let tab_entity = cx.new(|_cx| tab);
-
-    let url_tab_clone = tab_entity.clone();
-    cx.subscribe_in(
-        &url,
-        window,
-        move |_this: &mut ApiClient, _, event, _window, cx| {
-            if let InputEvent::Change = event {
-                url_tab_clone.update(cx, |tab, cx| {
-                    tab.dirty = true;
-                    cx.notify();
-                })
-            }
+        is_file: true,
+        children: vec![],
+        node_type: crate::NodeType::File {
+            method,
+            url,
+            pending: false,
+            dirty: false,
+            selected_editor_config: 0,
+            response_panel: Some(response_panel),
+            show_response_panel: false,
+            query_params: vec![],
         },
-    )
-    .detach();
-
-    let method_tab_clone = tab_entity.clone();
-    cx.subscribe_in(
-        &method,
-        window,
-        move |this: &mut ApiClient, _, event, _window, cx| {
-            if let SelectEvent::Confirm(Some(new_method)) = event {
-                let new_method = new_method.clone();
-
-                method_tab_clone.update(cx, |tab, cx| {
-                    tab.dirty = true;
-
-                    let path = tab.path.clone();
-
-                    if !path.is_empty() {
-                        for ws in &mut this.workspaces {
-                            if update_node_method(&mut ws.nodes, &path, &new_method) {
-                                break;
-                            }
-                        }
-                    }
-
-                    cx.notify();
-                });
-            }
-        },
-    )
-    .detach();
-
-    tab_entity
+    })
 }
 
 pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {
     let selected = api
         .active_tab_index
         .and_then(|i| api.tabs.get(i))
-        .map(|tab| tab.read(cx).selected_editor_config)
+        .map(|tab| tab.read(cx).selected_editor_config())
         .unwrap_or(0);
 
     div()
@@ -136,7 +69,7 @@ pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) ->
                 TabBar::new("request-tabs")
                     .w_full()
                     .with_variant(tab::TabVariant::Underline)
-                    .selected_index(selected.clone())
+                    .selected_index(selected)
                     .child(Tab::new().label("Params"))
                     .child(Tab::new().label("Authorization"))
                     .child(Tab::new().label("Headers"))
@@ -146,8 +79,8 @@ pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) ->
                         move |this: &mut ApiClient, idx: &usize, _window, cx| {
                             if let Some(tab) = this.active_tab_index.and_then(|i| this.tabs.get(i))
                             {
-                                tab.update(cx, |tab, _cx| {
-                                    tab.selected_editor_config = *idx;
+                                tab.update(cx, |node, _cx| {
+                                    node.set_selected_editor_config(*idx);
                                 });
                             }
                             cx.notify();
@@ -170,40 +103,40 @@ pub fn render_new_tab_button(_api: &ApiClient, cx: &mut Context<ApiClient>) -> i
                 .icon(IconName::Plus)
                 .tooltip("Add Tab")
                 .on_click(cx.listener(|this: &mut ApiClient, _event, window, cx| {
-                    let tab = add_tab(window, cx, "Untitled", "GET".to_string());
-                    this.tabs.push(tab);
+                    let node = new_tab(window, cx);
+                    // let node = setup_tab(node, window, cx);
+                    this.tabs.push(node);
                     this.active_tab_index = Some(this.tabs.len() - 1);
                     cx.notify();
                 })),
         )
 }
 
-pub fn render_tab(api: &ApiClient, cx: &mut Context<ApiClient>, tab: Entity<Tabs>) -> Tab {
+pub fn render_tab(_api: &ApiClient, cx: &mut Context<ApiClient>, tab: Entity<crate::Node>) -> Tab {
     let tab_to_close = tab.clone();
     let tab_state = tab.read(cx);
-    let id = tab_state.id;
-    let name = tab_state.name.clone();
-
-    let method = tab_state
-        .method
-        .read(cx)
-        .selected_value()
-        .map(String::as_str)
-        .unwrap_or("");
+    let name = tab_state.name.read(cx).value().to_string();
+    let method_str = tab_state.method_value(cx);
+    let close_id = tab_to_close.entity_id();
 
     Tab::default()
         .px_1()
-        .prefix(div().mr_1().child(build_method_tag(method)))
+        .prefix(div().mr_1().child(build_method_tag(&method_str)))
         .label(name)
         .suffix(
-            Button::new(("close-tab", id))
+            Button::new(("close-tab", close_id))
                 .ghost()
                 .xsmall()
                 .icon(IconName::Close)
                 .on_click(
                     cx.listener(move |this: &mut ApiClient, _: &ClickEvent, _window, cx| {
-                        this.tabs.retain(|t| t != &tab_to_close);
-                        this.active_tab_index = Some(this.tabs.len() - 1);
+                        let close_id = tab_to_close.entity_id();
+                        this.tabs.retain(|t| t.entity_id() != close_id);
+                        this.active_tab_index = if this.tabs.is_empty() {
+                            None
+                        } else {
+                            Some(this.tabs.len() - 1)
+                        };
                         cx.notify();
                     }),
                 ),

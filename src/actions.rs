@@ -1,6 +1,8 @@
-use crate::helpers::find_node_mut;
-use crate::{ApiClient, Node};
-use gpui::{Action, Context, Window};
+use crate::{ApiClient, Node, NodeType};
+use gpui::{Action, AppContext, Context, Window};
+use gpui_component::input::InputState;
+use gpui_component::select::SelectState;
+use gpui_component::IndexPath;
 
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = fs, no_json)]
@@ -12,44 +14,54 @@ impl ApiClient {
     pub fn handle_create_file(
         &mut self,
         action: &CreateFile,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let workspace_path = self.selected_workspace.clone();
 
         match crate::fs::create_file("new", &action.parent) {
             Ok(path) => {
-                let new_node = Node {
-                    name: "new.json".to_string(),
+                let name_entity =
+                    cx.new(|cx| InputState::new(window, cx).default_value("new.json"));
+                let url = cx.new(|cx| InputState::new(window, cx).placeholder("Enter URL..."));
+                let methods: Vec<String> =
+                    vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect();
+
+                let new_node = cx.new(|cx| Node {
+                    name: name_entity,
                     path,
-                    method: "GET".to_string(),
-                    children: vec![],
                     is_file: true,
-                };
+                    children: vec![],
+                    node_type: NodeType::File {
+                        method: cx.new(|cx| {
+                            SelectState::new(
+                                methods,
+                                Some(IndexPath {
+                                    section: 0,
+                                    row: 0,
+                                    column: 0,
+                                }),
+                                window,
+                                cx,
+                            )
+                        }),
+                        url,
+                        pending: false,
+                        dirty: false,
+                        selected_editor_config: 0,
+                        response_panel: None,
+                        show_response_panel: false,
+                        query_params: vec![],
+                    },
+                });
 
-                pub fn find_node_mut<'a>(
-                    nodes: &'a mut [Node],
-                    path: &str,
-                ) -> Option<&'a mut Node> {
-                    for node in nodes.iter_mut() {
-                        if node.path == path {
-                            return Some(node);
-                        }
-                        if let Some(found) = find_node_mut(&mut node.children, path) {
-                            return Some(found);
-                        }
-                    }
-                    None
-                }
-
-                if let Some(ws) = self
-                    .workspaces
-                    .iter_mut()
-                    .find(|w| w.path == workspace_path)
-                {
-                    if let Some(folder) = find_node_mut(&mut ws.nodes, &action.parent) {
-                        folder.children.push(new_node);
-                    }
+                if let Some(folder) = self.find_node(&action.parent, cx) {
+                    folder.update(cx, |node, _cx| {
+                        node.children.push(new_node);
+                    });
                 }
 
                 cx.notify();
