@@ -1,7 +1,8 @@
 use crate::ApiClient;
-use crate::helpers::build_method_tag;
+use crate::helpers::{build_method_tag, next_id, update_node_method};
+use crate::query_params::QueryParams;
 use gpui::*;
-use gpui_component::input::InputEvent;
+use gpui_component::input::{InputEvent, InputState};
 use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::sidebar::SidebarToggleButton;
 use gpui_component::tab::{Tab, TabBar};
@@ -33,20 +34,22 @@ pub fn add_tab(
         .into_iter()
         .map(String::from)
         .collect();
+    let selected_method = methods.iter().position(|m| *m == method).unwrap_or(0);
     let method = cx.new(|cx| {
         SelectState::new(
             methods,
             Some(IndexPath {
                 section: 0,
-                row: 0,
+                row: selected_method,
                 column: 0,
             }),
             window,
             cx,
         )
     });
-    let response_panel = cx.new(|cx| {
-        gpui_component::input::InputState::new(window, cx)
+
+    let response_panel_state = cx.new(|cx| {
+        InputState::new(window, cx)
             .code_editor("json")
             .line_number(true)
             .default_value("")
@@ -104,7 +107,10 @@ pub fn add_tab(
                 });
             }
         },
-    })
+    )
+    .detach();
+
+    tab_entity
 }
 
 pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) -> impl IntoElement {
@@ -123,7 +129,7 @@ pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) ->
                 TabBar::new("request-tabs")
                     .w_full()
                     .with_variant(tab::TabVariant::Underline)
-                    .selected_index(selected)
+                    .selected_index(selected.clone())
                     .child(Tab::new().label("Params"))
                     .child(Tab::new().label("Authorization"))
                     .child(Tab::new().label("Headers"))
@@ -133,8 +139,8 @@ pub fn render_editor_config(api: &mut ApiClient, cx: &mut Context<ApiClient>) ->
                         move |this: &mut ApiClient, idx: &usize, _window, cx| {
                             if let Some(tab) = this.active_tab_id.and_then(|id| this.tabs.get(&id))
                             {
-                                tab.update(cx, |node, _cx| {
-                                    node.set_selected_editor_config(*idx);
+                                tab.update(cx, |tab, _cx| {
+                                    tab.selected_editor_config = *idx;
                                 });
                             }
                             cx.notify();
@@ -166,7 +172,12 @@ pub fn render_new_tab_button(_api: &ApiClient, cx: &mut Context<ApiClient>) -> i
         )
 }
 
-pub fn render_tab(api: &ApiClient, cx: &mut Context<ApiClient>, node_id: usize, tab: &Entity<Tabs>) -> Tab {
+pub fn render_tab(
+    api: &ApiClient,
+    cx: &mut Context<ApiClient>,
+    node_id: usize,
+    tab: &Entity<Tabs>,
+) -> Tab {
     let tab_state = tab.read(cx);
     let tab_id = tab_state.id;
 
@@ -238,7 +249,9 @@ pub fn render_tab_bar(api: &ApiClient, cx: &mut Context<ApiClient>) -> impl Into
         )
         .track_scroll(&api.scroll_handle)
         .suffix(render_new_tab_button(api, cx))
-        .children(api.tabs.iter().map(|(&node_id, tab)| {
-            render_tab(api, cx, node_id, tab)
-        }))
+        .children(
+            api.tabs
+                .iter()
+                .map(|(&node_id, tab)| render_tab(api, cx, node_id, tab)),
+        )
 }

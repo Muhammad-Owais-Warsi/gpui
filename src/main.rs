@@ -4,20 +4,19 @@ mod helpers;
 mod http;
 mod query_params;
 mod tabs;
-use crate::helpers::{build_method_tag, next_id, read_dir_to_nodes};
+use crate::helpers::{build_method_tag, read_dir_to_nodes};
 use crate::query_params::query_params_from_json;
-use crate::tabs::{render_editor_config, render_tab_bar};
+use crate::tabs::{Tabs, add_tab, render_editor_config, render_tab_bar};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::Theme;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::Input;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::sidebar::{
     Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
 };
-use gpui_component::tab::Tab;
 use gpui_component::{button::*, *};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,124 +39,6 @@ pub struct Node {
     pub is_file: bool,
 }
 
-#[derive(Clone)]
-enum NodeType {
-    File {
-        method: Entity<SelectState<Vec<String>>>,
-        url: Entity<InputState>,
-        pending: bool,
-        dirty: bool,
-        selected_editor_config: usize,
-        response_panel: Option<Entity<InputState>>,
-        show_response_panel: bool,
-        query_params: Vec<Entity<query_params::QueryParams>>,
-    },
-
-    Folder,
-}
-
-#[derive(Clone)]
-pub struct Node {
-    pub path: String,
-    pub is_file: bool,
-    pub children: Vec<Entity<Node>>,
-    name: Entity<InputState>,
-    node_type: NodeType,
-}
-
-impl Node {
-    pub fn file_method(&self) -> Option<&Entity<SelectState<Vec<String>>>> {
-        match &self.node_type {
-            NodeType::File { method, .. } => Some(method),
-            _ => None,
-        }
-    }
-
-    pub fn file_url(&self) -> Option<&Entity<InputState>> {
-        match &self.node_type {
-            NodeType::File { url, .. } => Some(url),
-            _ => None,
-        }
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        matches!(&self.node_type, NodeType::File { dirty: true, .. })
-    }
-
-    pub fn set_dirty(&mut self, dirty: bool) {
-        if let NodeType::File { dirty: d, .. } = &mut self.node_type {
-            *d = dirty;
-        }
-    }
-
-    pub fn show_response_panel(&self) -> bool {
-        matches!(
-            &self.node_type,
-            NodeType::File {
-                show_response_panel: true,
-                ..
-            }
-        )
-    }
-
-    pub fn set_show_response_panel(&mut self, show: bool) {
-        if let NodeType::File {
-            show_response_panel,
-            ..
-        } = &mut self.node_type
-        {
-            *show_response_panel = show;
-        }
-    }
-
-    pub fn response_panel(&self) -> Option<&Entity<InputState>> {
-        match &self.node_type {
-            NodeType::File { response_panel, .. } => response_panel.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub fn selected_editor_config(&self) -> usize {
-        match &self.node_type {
-            NodeType::File {
-                selected_editor_config,
-                ..
-            } => *selected_editor_config,
-            _ => 0,
-        }
-    }
-
-    pub fn set_selected_editor_config(&mut self, config: usize) {
-        if let NodeType::File {
-            selected_editor_config,
-            ..
-        } = &mut self.node_type
-        {
-            *selected_editor_config = config;
-        }
-    }
-
-    pub fn query_params(&self) -> &[Entity<query_params::QueryParams>] {
-        match &self.node_type {
-            NodeType::File { query_params, .. } => query_params,
-            _ => &[],
-        }
-    }
-
-    pub fn query_params_mut(&mut self) -> &mut Vec<Entity<query_params::QueryParams>> {
-        match &mut self.node_type {
-            NodeType::File { query_params, .. } => query_params,
-            _ => panic!("query_params called on non-file node"),
-        }
-    }
-
-    pub fn method_value(&self, cx: &App) -> String {
-        self.file_method()
-            .and_then(|m| m.read(cx).selected_value().map(String::from))
-            .unwrap_or_default()
-    }
-}
-
 pub(crate) struct ApiClient {
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) selected_workspace: usize,
@@ -169,46 +50,6 @@ pub(crate) struct ApiClient {
 }
 
 impl ApiClient {
-    fn find_node(&self, path: &str, cx: &App) -> Option<Entity<Node>> {
-        for ws in &self.workspaces {
-            if let Some(found) = Self::find_in_nodes(&ws.nodes, path, cx) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    fn find_in_nodes(nodes: &[Entity<Node>], path: &str, cx: &App) -> Option<Entity<Node>> {
-        for node in nodes {
-            if node.read(cx).path == path {
-                return Some(node.clone());
-            }
-            let children = node.read(cx).children.clone();
-            if let Some(found) = Self::find_in_nodes(&children, path, cx) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    pub fn update_node_method_in_nodes(
-        nodes: &[Entity<Node>],
-        path: &str,
-        _method: &str,
-        cx: &mut App,
-    ) -> bool {
-        for node in nodes {
-            if node.read(cx).path == path {
-                return true;
-            }
-            let children = node.read(cx).children.clone();
-            if Self::update_node_method_in_nodes(&children, path, _method, cx) {
-                return true;
-            }
-        }
-        false
-    }
-
     fn new(window: &mut Window, cx: &mut Context<Self>, default_theme: SharedString) -> Self {
         let themes: Vec<SharedString> =
             ThemeRegistry::global(cx).themes().keys().cloned().collect();
@@ -266,111 +107,6 @@ impl ApiClient {
             theme,
             sidebar_collapsed: false,
         }
-    }
-
-    fn build_nodes(
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        nodes: Vec<NodeData>,
-    ) -> Vec<Entity<Node>> {
-        nodes
-            .into_iter()
-            .map(|n| {
-                let children = Self::build_nodes(window, cx, n.children);
-                let name_entity = cx.new(|cx| InputState::new(window, cx).default_value(&n.name));
-
-                let node_type = if n.is_file {
-                    let methods: Vec<String> =
-                        vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-                            .into_iter()
-                            .map(String::from)
-                            .collect();
-                    let selected_method = methods.iter().position(|m| *m == n.method).unwrap_or(0);
-
-                    NodeType::File {
-                        method: cx.new(|cx| {
-                            SelectState::new(
-                                methods,
-                                Some(IndexPath {
-                                    section: 0,
-                                    row: selected_method,
-                                    column: 0,
-                                }),
-                                window,
-                                cx,
-                            )
-                        }),
-                        url: cx.new(|cx| InputState::new(window, cx).placeholder("Enter URL...")),
-                        pending: false,
-                        dirty: false,
-                        selected_editor_config: 0,
-                        response_panel: Some(cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .code_editor("json")
-                                .line_number(true)
-                                .default_value("")
-                        })),
-
-                        show_response_panel: false,
-                        query_params: vec![],
-                    }
-                } else {
-                    NodeType::Folder
-                };
-
-                let node = cx.new(|_cx| Node {
-                    name: name_entity,
-                    path: n.path,
-                    is_file: n.is_file,
-                    children,
-                    node_type,
-                });
-
-                if n.is_file.clone() {
-                    let node_clone = node.clone();
-                    cx.subscribe_in(
-                        &node_clone.read(cx).file_url().cloned().expect("file node"),
-                        window,
-                        move |_this: &mut ApiClient, _, event, _window, cx| {
-                            if let InputEvent::Change = event {
-                                let node_clone = node_clone.clone();
-                                cx.defer(move |cx| {
-                                    node_clone.update(cx, |node, _cx| {
-                                        node.set_dirty(true);
-                                    });
-                                });
-                            }
-                        },
-                    )
-                    .detach();
-
-                    let node_clone = node.clone();
-                    cx.subscribe_in(
-                        &node_clone
-                            .read(cx)
-                            .file_method()
-                            .cloned()
-                            .expect("file node"),
-                        window,
-                        move |_this: &mut ApiClient, _, event, _window, cx| {
-                            if let SelectEvent::Confirm(Some(new_method)) = event {
-                                // let new_method = new_method.clone();
-                                let node_clone = node_clone.clone();
-                                cx.defer(move |cx| {
-                                    node_clone.update(cx, |node, cx| {
-                                        node.set_dirty(true);
-                                        cx.notify();
-                                    });
-                                });
-                            }
-                        },
-                    )
-                    .detach();
-                }
-
-                node
-            })
-            .collect()
     }
 
     fn render_node(
@@ -457,8 +193,8 @@ impl ApiClient {
                             let query_params =
                                 query_params_from_json(window, cx, tab.clone(), &value);
 
-                            tab.update(cx, |node, _cx| {
-                                *node.query_params_mut() = query_params;
+                            tab.update(cx, |tab, _cx| {
+                                tab.query_params = query_params;
                             });
                         }
                     }
@@ -470,8 +206,7 @@ impl ApiClient {
             );
         }
 
-        let children_entities = node.read(cx).children.clone();
-        if children_entities.is_empty() {
+        if node.children.is_empty() {
             item
         } else {
             let mut children = Vec::new();
@@ -484,7 +219,6 @@ impl ApiClient {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active_node_id = self.active_tab_id;
-
         let ws = &self.workspaces[self.selected_workspace];
 
         Sidebar::new("api-sidebar")
@@ -549,10 +283,10 @@ impl ApiClient {
 
         let tab_state = tab.read(cx);
 
-        let method = tab_state.file_method().cloned();
-        let url = tab_state.file_url().cloned();
-        let is_dirty = tab_state.is_dirty();
-        let response_panel = tab_state.response_panel().cloned();
+        let method = tab_state.method.clone();
+        let url = tab_state.url.clone();
+        let is_dirty = tab_state.dirty;
+        let response_panel = tab_state.response_panel.clone();
 
         h_flex()
             .w_full()
@@ -569,9 +303,10 @@ impl ApiClient {
             )
             .child(Button::new("send").primary().label("Send").on_click({
                 let url = url.clone();
+                let response_panel = response_panel.clone();
 
                 cx.listener(move |this: &mut ApiClient, _, _window, cx| {
-                    let url_str = url.read(cx).value().to_string();
+                    let url = url.read(cx).value().to_string();
 
                     if let Some(tab) = this.active_tab_id.and_then(|id| this.tabs.get(&id)) {
                         tab.update(cx, |tab, _cx| {
@@ -582,20 +317,18 @@ impl ApiClient {
                     cx.notify();
 
                     let response_panel = response_panel.clone();
-                    let url = url_str;
 
                     cx.spawn(async move |this, cx| {
                         let result = http::send_get(&url).await;
 
                         let _ = this.update_in(cx, |_this, window, cx| {
-                            if let Some(rp) = response_panel {
-                                rp.update(cx, |state, cx| match result {
-                                    Ok(response) => {
-                                        let formatted =
-                                            serde_json::from_str::<serde_json::Value>(&response)
-                                                .ok()
-                                                .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                                                .unwrap_or(response);
+                            response_panel.update(cx, |state, cx| match result {
+                                Ok(response) => {
+                                    let formatted =
+                                        serde_json::from_str::<serde_json::Value>(&response)
+                                            .ok()
+                                            .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                                            .unwrap_or(response);
 
                                     state.set_value(formatted, window, cx);
                                 }
@@ -762,7 +495,7 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
 
-        let theme_name = SharedString::from("Asciinema");
+        let theme_name = SharedString::from("Aurora Light");
         let default_theme = theme_name.clone();
         if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
             Theme::global_mut(cx).apply_config(&theme);

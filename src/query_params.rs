@@ -1,5 +1,5 @@
 use crate::ApiClient;
-use crate::Node;
+use crate::tabs::Tabs;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
@@ -16,7 +16,7 @@ pub struct QueryParams {
 fn build_query_param_entity(
     window: &mut Window,
     cx: &mut Context<ApiClient>,
-    tab: Entity<Node>,
+    tab: Entity<Tabs>,
     key: &str,
     value: &str,
     active: bool,
@@ -37,10 +37,10 @@ fn build_query_param_entity(
     cx.subscribe_in(
         &key_input_state_sub,
         window,
-        move |this: &mut ApiClient, _, event, _window, cx| {
+        move |_this: &mut ApiClient, _, event, _window, cx| {
             if let InputEvent::Change = event {
-                key_tab.update(cx, |node, cx| {
-                    node.set_dirty(true);
+                key_tab.update(cx, |tab, cx| {
+                    tab.dirty = true;
                     cx.notify();
                 })
             }
@@ -53,10 +53,10 @@ fn build_query_param_entity(
     cx.subscribe_in(
         &value_input_state_sub,
         window,
-        move |this: &mut ApiClient, _, event, _window, cx| {
+        move |_this: &mut ApiClient, _, event, _window, cx| {
             if let InputEvent::Change = event {
-                value_tab.update(cx, |node, cx| {
-                    node.set_dirty(true);
+                value_tab.update(cx, |tab, cx| {
+                    tab.dirty = true;
                     cx.notify();
                 })
             }
@@ -71,20 +71,19 @@ fn new_query_param(
     _api: &mut ApiClient,
     window: &mut Window,
     cx: &mut Context<ApiClient>,
-    tab: Entity<Node>,
+    tab: Entity<Tabs>,
 ) {
     let qp = build_query_param_entity(window, cx, tab.clone(), "", "", true);
 
-    tab.update(cx, |node, _cx| {
-        node.query_params_mut().push(qp);
+    tab.update(cx, |tab, _cx| {
+        tab.query_params.push(qp);
     });
 }
 
-/// we can change the name of this method.
 pub fn query_params_from_json(
     window: &mut Window,
     cx: &mut Context<ApiClient>,
-    tab: Entity<Node>,
+    tab: Entity<Tabs>,
     value: &serde_json::Value,
 ) -> Vec<Entity<QueryParams>> {
     let Some(items) = value.get("query_params").and_then(|v| v.as_array()) else {
@@ -131,9 +130,7 @@ pub fn render_query_params_section(
                         }),
                 ),
         )
-        .child({
-            let query_params = tab.read(cx).query_params().clone();
-
+        .child(
             Table::new()
                 .child(
                     TableHeader::new().w_full().child(
@@ -144,7 +141,8 @@ pub fn render_query_params_section(
                             .child(TableHead::new().w(rems(2.5)).child("")),
                     ),
                 )
-                .child(
+                .child({
+                    let query_params = tab.read(cx).query_params.clone();
                     TableBody::new().children(query_params.into_iter().enumerate().map(
                         |(i, entity)| {
                             let entity = entity.clone();
@@ -178,8 +176,8 @@ pub fn render_query_params_section(
                                                 let tab = tab.clone();
 
                                                     cx.listener(move |_this: &mut ApiClient, _: &ClickEvent, _window, cx| {
-                                                        tab.update(cx, |node, _cx| {
-                                                            node.query_params_mut()
+                                                        tab.update(cx, |tab, _cx| {
+                                                            tab.query_params
                                                                 .retain(|q| q.entity_id() != entity.entity_id());
                                                         });
 
@@ -189,7 +187,7 @@ pub fn render_query_params_section(
                                     ),
                                 )
                         },
-                    )),
-                )
-        })
+                    ))
+                }),
+        )
 }

@@ -1,4 +1,4 @@
-use crate::NodeData;
+use crate::Node;
 use gpui::*;
 use gpui_component::tag::Tag;
 use gpui_component::{ColorName, Sizable};

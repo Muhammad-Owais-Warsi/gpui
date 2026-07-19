@@ -39,6 +39,8 @@ impl ApiClient {
                     name: "new.json".to_string(),
                     path,
                     is_file: true,
+                    method: "GET".to_string(),
+                    children: vec![],
                 };
 
                 ws.nodes.insert(id, new_node);
