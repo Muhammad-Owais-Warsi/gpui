@@ -334,7 +334,6 @@ impl ApiClient {
                                             .unwrap_or(response);
 
                                     state.set_value(formatted, window, cx);
-                                    cx.notify();
                                 }
                                 Err(err) => {
                                     state.set_value(format!("Error: {err}"), window, cx);
