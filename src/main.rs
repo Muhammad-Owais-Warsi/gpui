@@ -2,17 +2,15 @@ mod actions;
 mod fs;
 mod helpers;
 mod http;
-// mod http;
 mod query_params;
 mod tabs;
-use crate::helpers::{build_method_tag, next_id, read_dir_to_nodes};
-use crate::http::send_get;
+use crate::helpers::{build_method_tag, read_dir_to_nodes};
 use crate::query_params::query_params_from_json;
-use crate::tabs::{render_editor_config, render_tab_bar};
+use crate::tabs::{Tabs, add_tab, render_editor_config, render_tab_bar};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::Theme;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::Input;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{Select, SelectEvent, SelectState};
@@ -20,193 +18,38 @@ use gpui_component::sidebar::{
     Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
 };
 use gpui_component::{button::*, *};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Clone)]
 struct Workspace {
     name: String,
     path: String,
-    nodes: Vec<Entity<Node>>,
-}
-
-#[derive(Clone)]
-pub struct NodeData {
-    path: String,
-    name: String,
-    method: String,
-    children: Vec<NodeData>,
-    is_file: bool,
-}
-
-#[derive(Clone)]
-enum NodeType {
-    File {
-        method: Entity<SelectState<Vec<String>>>,
-        url: Entity<InputState>,
-        pending: bool,
-        dirty: bool,
-        selected_editor_config: usize,
-        response_panel: Option<Entity<InputState>>,
-        show_response_panel: bool,
-        query_params: Vec<Entity<query_params::QueryParams>>,
-    },
-
-    Folder,
+    nodes: HashMap<usize, Node>,
+    root_id: Vec<usize>,
 }
 
 #[derive(Clone)]
 pub struct Node {
+    pub id: usize,
     pub path: String,
+    pub name: String,
+    pub method: String,
+    pub children: Vec<usize>,
     pub is_file: bool,
-    pub children: Vec<Entity<Node>>,
-    name: Entity<InputState>,
-    node_type: NodeType,
-}
-
-impl Node {
-    pub fn file_method(&self) -> Option<&Entity<SelectState<Vec<String>>>> {
-        match &self.node_type {
-            NodeType::File { method, .. } => Some(method),
-            _ => None,
-        }
-    }
-
-    pub fn file_url(&self) -> Option<&Entity<InputState>> {
-        match &self.node_type {
-            NodeType::File { url, .. } => Some(url),
-            _ => None,
-        }
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        matches!(&self.node_type, NodeType::File { dirty: true, .. })
-    }
-
-    pub fn set_dirty(&mut self, dirty: bool) {
-        if let NodeType::File { dirty: d, .. } = &mut self.node_type {
-            *d = dirty;
-        }
-    }
-
-    pub fn show_response_panel(&self) -> bool {
-        matches!(
-            &self.node_type,
-            NodeType::File {
-                show_response_panel: true,
-                ..
-            }
-        )
-    }
-
-    pub fn set_show_response_panel(&mut self, show: bool) {
-        if let NodeType::File {
-            show_response_panel,
-            ..
-        } = &mut self.node_type
-        {
-            *show_response_panel = show;
-        }
-    }
-
-    pub fn response_panel(&self) -> Option<&Entity<InputState>> {
-        match &self.node_type {
-            NodeType::File { response_panel, .. } => response_panel.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub fn selected_editor_config(&self) -> usize {
-        match &self.node_type {
-            NodeType::File {
-                selected_editor_config,
-                ..
-            } => *selected_editor_config,
-            _ => 0,
-        }
-    }
-
-    pub fn set_selected_editor_config(&mut self, config: usize) {
-        if let NodeType::File {
-            selected_editor_config,
-            ..
-        } = &mut self.node_type
-        {
-            *selected_editor_config = config;
-        }
-    }
-
-    pub fn query_params(&self) -> &[Entity<query_params::QueryParams>] {
-        match &self.node_type {
-            NodeType::File { query_params, .. } => query_params,
-            _ => &[],
-        }
-    }
-
-    pub fn query_params_mut(&mut self) -> &mut Vec<Entity<query_params::QueryParams>> {
-        match &mut self.node_type {
-            NodeType::File { query_params, .. } => query_params,
-            _ => panic!("query_params called on non-file node"),
-        }
-    }
-
-    pub fn method_value(&self, cx: &App) -> String {
-        self.file_method()
-            .and_then(|m| m.read(cx).selected_value().map(String::from))
-            .unwrap_or_default()
-    }
 }
 
 pub(crate) struct ApiClient {
     pub(crate) workspaces: Vec<Workspace>,
-    pub(crate) selected_workspace: String,
-    pub(crate) tabs: Vec<Entity<Node>>,
-    pub(crate) active_tab_index: Option<usize>,
+    pub(crate) selected_workspace: usize,
+    pub(crate) tabs: HashMap<usize, Entity<Tabs>>,
+    pub(crate) active_tab_id: Option<usize>,
     pub(crate) scroll_handle: ScrollHandle,
     pub(crate) theme: Entity<SelectState<Vec<SharedString>>>,
     pub(crate) sidebar_collapsed: bool,
 }
 
 impl ApiClient {
-    fn find_node(&self, path: &str, cx: &App) -> Option<Entity<Node>> {
-        for ws in &self.workspaces {
-            if let Some(found) = Self::find_in_nodes(&ws.nodes, path, cx) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    fn find_in_nodes(nodes: &[Entity<Node>], path: &str, cx: &App) -> Option<Entity<Node>> {
-        for node in nodes {
-            if node.read(cx).path == path {
-                return Some(node.clone());
-            }
-            let children = node.read(cx).children.clone();
-            if let Some(found) = Self::find_in_nodes(&children, path, cx) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    pub fn update_node_method_in_nodes(
-        nodes: &[Entity<Node>],
-        path: &str,
-        _method: &str,
-        cx: &mut App,
-    ) -> bool {
-        for node in nodes {
-            if node.read(cx).path == path {
-                return true;
-            }
-            let children = node.read(cx).children.clone();
-            if Self::update_node_method_in_nodes(&children, path, _method, cx) {
-                return true;
-            }
-        }
-        false
-    }
-
     fn new(window: &mut Window, cx: &mut Context<Self>, default_theme: SharedString) -> Self {
         let themes: Vec<SharedString> =
             ThemeRegistry::global(cx).themes().keys().cloned().collect();
@@ -247,147 +90,43 @@ impl ApiClient {
 
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let workspace_path = home.join("projects").join("react-app");
-        let raw_nodes = read_dir_to_nodes(&workspace_path);
+        let tree = read_dir_to_nodes(&workspace_path);
         let workspace = Workspace {
             name: "react-app".into(),
             path: workspace_path.to_string_lossy().to_string(),
-            nodes: Self::build_nodes(window, cx, raw_nodes),
+            nodes: tree.nodes,
+            root_id: tree.root_ids,
         };
-
-        // let selected_workspace = workspace.clone();
 
         Self {
             workspaces: vec![workspace],
-            selected_workspace: workspace_path.to_string_lossy().to_string(), // for now hardcoded
-            tabs: Vec::new(),
-            active_tab_index: None,
+            selected_workspace: 0,
+            tabs: HashMap::new(),
+            active_tab_id: None,
             scroll_handle: ScrollHandle::new(),
             theme,
             sidebar_collapsed: false,
         }
     }
 
-    fn build_nodes(
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        nodes: Vec<NodeData>,
-    ) -> Vec<Entity<Node>> {
-        nodes
-            .into_iter()
-            .map(|n| {
-                let children = Self::build_nodes(window, cx, n.children);
-                let name_entity = cx.new(|cx| InputState::new(window, cx).default_value(&n.name));
-
-                let node_type = if n.is_file {
-                    let methods: Vec<String> =
-                        vec!["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-                            .into_iter()
-                            .map(String::from)
-                            .collect();
-                    let selected_method = methods.iter().position(|m| *m == n.method).unwrap_or(0);
-
-                    NodeType::File {
-                        method: cx.new(|cx| {
-                            SelectState::new(
-                                methods,
-                                Some(IndexPath {
-                                    section: 0,
-                                    row: selected_method,
-                                    column: 0,
-                                }),
-                                window,
-                                cx,
-                            )
-                        }),
-                        url: cx.new(|cx| InputState::new(window, cx).placeholder("Enter URL...")),
-                        pending: false,
-                        dirty: false,
-                        selected_editor_config: 0,
-                        response_panel: Some(cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .code_editor("json")
-                                .line_number(true)
-                                .default_value("")
-                        })),
-
-                        show_response_panel: false,
-                        query_params: vec![],
-                    }
-                } else {
-                    NodeType::Folder
-                };
-
-                let node = cx.new(|_cx| Node {
-                    name: name_entity,
-                    path: n.path,
-                    is_file: n.is_file,
-                    children,
-                    node_type,
-                });
-
-                if n.is_file.clone() {
-                    let node_clone = node.clone();
-                    cx.subscribe_in(
-                        &node_clone.read(cx).file_url().cloned().expect("file node"),
-                        window,
-                        move |_this: &mut ApiClient, _, event, _window, cx| {
-                            if let InputEvent::Change = event {
-                                let node_clone = node_clone.clone();
-                                cx.defer(move |cx| {
-                                    node_clone.update(cx, |node, _cx| {
-                                        node.set_dirty(true);
-                                    });
-                                });
-                            }
-                        },
-                    )
-                    .detach();
-
-                    let node_clone = node.clone();
-                    cx.subscribe_in(
-                        &node_clone
-                            .read(cx)
-                            .file_method()
-                            .cloned()
-                            .expect("file node"),
-                        window,
-                        move |_this: &mut ApiClient, _, event, _window, cx| {
-                            if let SelectEvent::Confirm(Some(new_method)) = event {
-                                // let new_method = new_method.clone();
-                                let node_clone = node_clone.clone();
-                                cx.defer(move |cx| {
-                                    node_clone.update(cx, |node, cx| {
-                                        node.set_dirty(true);
-                                        cx.notify();
-                                    });
-                                });
-                            }
-                        },
-                    )
-                    .detach();
-                }
-
-                node
-            })
-            .collect()
-    }
-
     fn render_node(
         &self,
-        node: &Entity<Node>,
+        node_id: usize,
         cx: &mut Context<Self>,
-        active_path: Option<&String>,
+        active_node_id: Option<usize>,
     ) -> SidebarMenuItem {
-        let node_state = node.read(cx);
-        let is_file = node_state.is_file;
-        let name = node_state.name.read(cx).value().to_string();
-        let path = node_state.path.clone();
-        let method_str = node_state.method_value(cx);
+        let ws = &self.workspaces[self.selected_workspace];
+        let Some(node) = ws.nodes.get(&node_id) else {
+            return SidebarMenuItem::new("???".to_string());
+        };
 
-        let method_for_suffix = method_str.clone();
-        let name_for_click = name.clone();
-        let path_for_click = path.clone();
-        let node_for_tab = node.clone();
+        let is_file = node.is_file;
+        let name = node.name.clone();
+        let method = node.method.clone();
+
+        let method_for_suffix = method.clone();
+        let node_id_for_click = node_id;
+        let node_id_for_menu = node_id;
 
         let mut item = SidebarMenuItem::new(name.clone())
             .suffix(move |_, _| {
@@ -397,14 +136,29 @@ impl ApiClient {
                     div()
                 }
             })
-            .active(active_path == Some(&path));
+            .active(active_node_id == Some(node_id));
 
         if !is_file {
             item = item.context_menu(move |menu, _window, _cx| {
-                menu.menu(
+                menu.menu_with_icon(
                     "Create File",
+                    IconName::File,
                     Box::new(actions::CreateFile {
-                        parent: path.clone(),
+                        parent_id: node_id_for_menu,
+                    }),
+                )
+            });
+        }
+
+        if is_file {
+            let rename_node_id = node_id;
+            item = item.context_menu(move |menu, _window, _cx| {
+                menu.menu_with_icon(
+                    "Rename",
+                    IconName::Redo,
+                    Box::new(actions::RenameFile {
+                        node_id: rename_node_id,
+                        new_name: "renamed.json".to_string(),
                     }),
                 )
             });
@@ -413,77 +167,71 @@ impl ApiClient {
         if is_file {
             item = item.on_click(
                 cx.listener(move |this: &mut ApiClient, _event, window, cx| {
-                    if let Some(idx) = this
-                        .tabs
-                        .iter()
-                        .position(|t| t.read(cx).path == path_for_click)
-                    {
-                        this.active_tab_index = Some(idx);
+                    if this.tabs.contains_key(&node_id_for_click) {
+                        this.active_tab_id = Some(node_id_for_click);
                         cx.notify();
                         return;
                     }
 
-                    let tab = node_for_tab.clone();
+                    let ws = &this.workspaces[this.selected_workspace];
+                    let (file_path, file_method) = ws
+                        .nodes
+                        .get(&node_id_for_click)
+                        .map(|n| (n.path.clone(), n.method.clone()))
+                        .unwrap_or_default();
 
-                    // this.tabs.push(node_for_tab.clone());
+                    let tab = add_tab(window, cx, node_id_for_click, file_method);
 
-                    if let Ok(content) = std::fs::read_to_string(&path_for_click) {
+                    if let Ok(content) = std::fs::read_to_string(&file_path) {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
                             if let Some(url) = value.get("url").and_then(|v| v.as_str()) {
                                 let url = url.to_string();
-                                let url_entity = tab.read(cx).file_url().unwrap().clone();
+                                let url_entity = tab.read(cx).url.clone();
                                 url_entity.update(cx, |input, cx| input.set_value(url, window, cx));
                             }
 
                             let query_params =
                                 query_params_from_json(window, cx, tab.clone(), &value);
 
-                            tab.update(cx, |node, _cx| {
-                                *node.query_params_mut() = query_params;
+                            tab.update(cx, |tab, _cx| {
+                                tab.query_params = query_params;
                             });
                         }
                     }
 
-                    this.tabs.push(tab);
-                    this.active_tab_index = Some(this.tabs.len() - 1);
+                    this.tabs.insert(node_id_for_click, tab);
+                    this.active_tab_id = Some(node_id_for_click);
                     cx.notify();
                 }),
             );
         }
 
-        let children_entities = node.read(cx).children.clone();
-        if children_entities.is_empty() {
+        if node.children.is_empty() {
             item
         } else {
             let mut children = Vec::new();
-            for child in &children_entities {
-                children.push(self.render_node(child, cx, active_path));
+            for &child_id in &node.children {
+                children.push(self.render_node(child_id, cx, active_node_id));
             }
             item.children(children)
         }
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active_path = self
-            .active_tab_index
-            .and_then(|i| self.tabs.get(i))
-            .map(|t| t.read(cx).path.clone());
+        let active_node_id = self.active_tab_id;
+        let ws = &self.workspaces[self.selected_workspace];
 
         Sidebar::new("api-sidebar")
             .collapsible(SidebarCollapsible::Icon)
             .collapsed(self.sidebar_collapsed)
-            .children(
-                self.workspaces
-                    .iter()
-                    .find(|ws| ws.path == self.selected_workspace)
-                    .into_iter()
-                    .map(|ws| {
-                        SidebarGroup::new(&ws.name).child(SidebarMenu::new().children(
-                            ws.nodes.iter().map(|child| {
-                                Self::render_node(self, child, cx, active_path.as_ref())
-                            }),
-                        ))
-                    }),
+            .child(
+                SidebarGroup::new(&ws.name).child(
+                    SidebarMenu::new().children(
+                        ws.root_id
+                            .iter()
+                            .map(|&id| self.render_node(id, cx, active_node_id)),
+                    ),
+                ),
             )
     }
 
@@ -508,12 +256,10 @@ impl ApiClient {
                         .icon(IconName::PanelBottom)
                         .tooltip("Response")
                         .on_click(cx.listener(|this: &mut ApiClient, _, _window, cx| {
-                            if let Some(tab) = this.active_tab_index.and_then(|i| this.tabs.get(i))
+                            if let Some(tab) = this.active_tab_id.and_then(|id| this.tabs.get(&id))
                             {
-                                tab.update(cx, |node, cx| {
-                                    let show = !node.show_response_panel();
-                                    node.set_show_response_panel(show);
-                                    cx.notify();
+                                tab.update(cx, |tab, _cx| {
+                                    tab.show_response_panel = !tab.show_response_panel;
                                 })
                             }
                             cx.notify();
@@ -531,21 +277,16 @@ impl ApiClient {
     }
 
     fn render_editor(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(tab) = self.active_tab_index.and_then(|i| self.tabs.get(i)) else {
+        let Some(tab) = self.active_tab_id.and_then(|id| self.tabs.get(&id)) else {
             return div().child("No tab open");
         };
 
         let tab_state = tab.read(cx);
 
-        let method = tab_state.file_method().cloned();
-        let url = tab_state.file_url().cloned();
-        let is_dirty = tab_state.is_dirty();
-        let response_panel = tab_state.response_panel().cloned();
-
-        drop(tab_state); // <-- important
-
-        let method = method.expect("tab should be a file node");
-        let url = url.expect("tab should be a file node");
+        let method = tab_state.method.clone();
+        let url = tab_state.url.clone();
+        let is_dirty = tab_state.dirty;
+        let response_panel = tab_state.response_panel.clone();
 
         h_flex()
             .w_full()
@@ -562,42 +303,40 @@ impl ApiClient {
             )
             .child(Button::new("send").primary().label("Send").on_click({
                 let url = url.clone();
+                let response_panel = response_panel.clone();
 
                 cx.listener(move |this: &mut ApiClient, _, _window, cx| {
-                    let url_str = url.read(cx).value().to_string();
+                    let url = url.read(cx).value().to_string();
 
-                    if let Some(tab) = this.active_tab_index.and_then(|i| this.tabs.get(i)) {
-                        tab.update(cx, |node, cx| {
-                            node.set_show_response_panel(true);
-                            cx.notify();
+                    if let Some(tab) = this.active_tab_id.and_then(|id| this.tabs.get(&id)) {
+                        tab.update(cx, |tab, _cx| {
+                            tab.show_response_panel = true;
                         });
                     }
 
                     cx.notify();
 
                     let response_panel = response_panel.clone();
-                    let url = url_str;
 
                     cx.spawn(async move |this, cx| {
                         let result = http::send_get(&url).await;
 
                         let _ = this.update_in(cx, |_this, window, cx| {
-                            if let Some(rp) = response_panel {
-                                rp.update(cx, |state, cx| match result {
-                                    Ok(response) => {
-                                        let formatted =
-                                            serde_json::from_str::<serde_json::Value>(&response)
-                                                .ok()
-                                                .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                                                .unwrap_or(response);
+                            response_panel.update(cx, |state, cx| match result {
+                                Ok(response) => {
+                                    let formatted =
+                                        serde_json::from_str::<serde_json::Value>(&response)
+                                            .ok()
+                                            .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                                            .unwrap_or(response);
 
-                                        state.set_value(formatted, window, cx);
-                                    }
-                                    Err(err) => {
-                                        state.set_value(format!("Error: {err}"), window, cx);
-                                    }
-                                });
-                            }
+                                    state.set_value(formatted, window, cx);
+                                }
+                                Err(err) => {
+                                    state.set_value(format!("Error: {err}"), window, cx);
+                                }
+                            });
+                            cx.notify();
                         });
                     })
                     .detach();
@@ -608,12 +347,12 @@ impl ApiClient {
 
 impl Render for ApiClient {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let has_tab = self.active_tab_index.is_some();
+        let has_tab = self.active_tab_id.is_some();
 
         let show_response = self
-            .active_tab_index
-            .and_then(|i| self.tabs.get(i))
-            .map(|t| t.read(cx).show_response_panel())
+            .active_tab_id
+            .and_then(|id| self.tabs.get(&id))
+            .map(|t| t.read(cx).show_response_panel)
             .unwrap_or(false);
 
         let main_content = if has_tab {
@@ -634,9 +373,9 @@ impl Render for ApiClient {
                 .child(
                     div().flex_1().overflow_y_scrollbar().px(px(24.)).child(
                         match self
-                            .active_tab_index
-                            .and_then(|i| self.tabs.get(i))
-                            .map(|tab| tab.read(cx).selected_editor_config())
+                            .active_tab_id
+                            .and_then(|id| self.tabs.get(&id))
+                            .map(|tab| tab.read(cx).selected_editor_config)
                             .unwrap_or(0)
                         {
                             0 => query_params::render_query_params_section(self, cx)
@@ -649,7 +388,7 @@ impl Render for ApiClient {
                 let response_content = div()
                     .w_full()
                     .h_full()
-                    .min_h(px(0.)) // <- add this
+                    .min_h(px(0.))
                     .v_flex()
                     .border_t_1()
                     .border_color(cx.theme().border)
@@ -674,11 +413,10 @@ impl Render for ApiClient {
                                     .on_click(cx.listener(
                                         |this: &mut ApiClient, _, _window, cx| {
                                             if let Some(tab) =
-                                                this.active_tab_index.and_then(|i| this.tabs.get(i))
+                                                this.active_tab_id.and_then(|id| this.tabs.get(&id))
                                             {
-                                                tab.update(cx, |node, cx| {
-                                                    node.set_show_response_panel(false);
-                                                    cx.notify();
+                                                tab.update(cx, |tab, _cx| {
+                                                    tab.show_response_panel = false;
                                                 })
                                             }
                                             cx.notify();
@@ -688,14 +426,12 @@ impl Render for ApiClient {
                     )
                     .child({
                         if let Some(response_panel_state) = self
-                            .active_tab_index
-                            .and_then(|i| self.tabs.get(i))
-                            .map(|t| t.read(cx).response_panel().cloned())
-                            .flatten()
+                            .active_tab_id
+                            .and_then(|id| self.tabs.get(&id))
+                            .map(|t| t.read(cx).response_panel.clone())
                         {
                             Input::new(&response_panel_state)
                                 .flex_1()
-                                // .disabled(true) // think about this
                                 .appearance(false)
                                 .into_any_element()
                         } else {
@@ -734,6 +470,7 @@ impl Render for ApiClient {
             .size_full()
             .flex()
             .on_action(cx.listener(Self::handle_create_file))
+            .on_action(cx.listener(Self::handle_rename))
             .child(self.render_sidebar(cx))
             .child(
                 div()
@@ -758,7 +495,7 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
 
-        let theme_name = SharedString::from("Asciinema");
+        let theme_name = SharedString::from("Aurora Light");
         let default_theme = theme_name.clone();
         if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
             Theme::global_mut(cx).apply_config(&theme);
