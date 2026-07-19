@@ -1,9 +1,11 @@
 mod actions;
 mod fs;
+mod headers;
 mod helpers;
 mod http;
 mod query_params;
 mod tabs;
+use crate::headers::headers_from_json;
 use crate::helpers::{build_method_tag, read_dir_to_nodes};
 use crate::query_params::query_params_from_json;
 use crate::tabs::{Tabs, add_tab, render_editor_config, render_tab_bar};
@@ -193,9 +195,15 @@ impl ApiClient {
                             let query_params =
                                 query_params_from_json(window, cx, tab.clone(), &value);
 
+                            let headers = headers_from_json(window, cx, tab.clone(), &value);
+
                             tab.update(cx, |tab, _cx| {
                                 tab.query_params = query_params;
                             });
+
+                            tab.update(cx, |tab, _cx| {
+                                tab.headers = headers;
+                            })
                         }
                     }
 
@@ -307,19 +315,57 @@ impl ApiClient {
 
                 cx.listener(move |this: &mut ApiClient, _, _window, cx| {
                     let url = url.read(cx).value().to_string();
+                    let method = method
+                        .read(cx)
+                        .selected_value()
+                        .unwrap_or(&"GET".to_string())
+                        .clone();
 
-                    if let Some(tab) = this.active_tab_id.and_then(|id| this.tabs.get(&id)) {
-                        tab.update(cx, |tab, _cx| {
-                            tab.show_response_panel = true;
-                        });
-                    }
+                    let (query_params, headers) =
+                        if let Some(tab) = this.active_tab_id.and_then(|id| this.tabs.get(&id)) {
+                            tab.update(cx, |tab, _cx| {
+                                tab.show_response_panel = true;
+                            });
+
+                            let qp = tab
+                                .read(cx)
+                                .query_params
+                                .iter()
+                                .filter(|qp| qp.read(cx).active)
+                                .map(|qp| {
+                                    let state = qp.read(cx);
+                                    (
+                                        state.key.read(cx).value().to_string(),
+                                        state.value.read(cx).value().to_string(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            let hd = tab
+                                .read(cx)
+                                .headers
+                                .iter()
+                                .filter(|h| h.read(cx).active)
+                                .map(|h| {
+                                    let state = h.read(cx);
+                                    (
+                                        state.key.read(cx).value().to_string(),
+                                        state.value.read(cx).value().to_string(),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            (qp, hd)
+                        } else {
+                            (vec![], vec![])
+                        };
 
                     cx.notify();
 
                     let response_panel = response_panel.clone();
 
                     cx.spawn(async move |this, cx| {
-                        let result = http::send_get(&url).await;
+                        let result = http::send_request(&url, &method, query_params, headers).await;
 
                         let _ = this.update_in(cx, |_this, window, cx| {
                             response_panel.update(cx, |state, cx| match result {
@@ -380,6 +426,7 @@ impl Render for ApiClient {
                         {
                             0 => query_params::render_query_params_section(self, cx)
                                 .into_any_element(),
+                            2 => headers::render_headers_section(self, cx).into_any_element(),
                             _ => div().into_any_element(),
                         },
                     ),
@@ -495,7 +542,7 @@ fn main() {
     app.run(move |cx| {
         gpui_component::init(cx);
 
-        let theme_name = SharedString::from("Aurora Light");
+        let theme_name = SharedString::from("Ayu Dark");
         let default_theme = theme_name.clone();
         if let Some(theme) = ThemeRegistry::global(cx).themes().get(&theme_name).cloned() {
             Theme::global_mut(cx).apply_config(&theme);

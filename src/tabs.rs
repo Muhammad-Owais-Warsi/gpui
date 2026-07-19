@@ -1,4 +1,5 @@
 use crate::ApiClient;
+use crate::headers::Headers;
 use crate::helpers::{build_method_tag, next_id, update_node_method};
 use crate::query_params::QueryParams;
 use gpui::*;
@@ -15,6 +16,7 @@ pub struct Tabs {
     pub(crate) method: Entity<SelectState<Vec<String>>>,
     pub(crate) url: Entity<InputState>,
     pub(crate) query_params: Vec<Entity<QueryParams>>,
+    pub(crate) headers: Vec<Entity<Headers>>,
     pub(crate) pending: bool,
     pub(crate) dirty: bool,
     pub(crate) selected_editor_config: usize,
@@ -61,6 +63,7 @@ pub fn add_tab(
         method: method.clone(),
         url: url.clone(),
         query_params: vec![],
+        headers: vec![],
         pending: false,
         dirty: false,
         selected_editor_config: 0,
