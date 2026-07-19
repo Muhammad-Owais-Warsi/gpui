@@ -175,12 +175,12 @@ impl ApiClient {
                         return;
                     }
 
-                let ws = &this.workspaces[this.selected_workspace];
-                let (file_path, file_method) = ws
-                    .nodes
-                    .get(&node_id_for_click)
-                    .map(|n| (n.path.clone(), n.method.clone()))
-                    .unwrap_or_default();
+                    let ws = &this.workspaces[this.selected_workspace];
+                    let (file_path, file_method) = ws
+                        .nodes
+                        .get(&node_id_for_click)
+                        .map(|n| (n.path.clone(), n.method.clone()))
+                        .unwrap_or_default();
 
                     let tab = add_tab(window, cx, node_id_for_click, file_method);
 
@@ -227,9 +227,15 @@ impl ApiClient {
         Sidebar::new("api-sidebar")
             .collapsible(SidebarCollapsible::Icon)
             .collapsed(self.sidebar_collapsed)
-            .child(SidebarGroup::new(&ws.name).child(SidebarMenu::new().children(
-                ws.root_id.iter().map(|&id| self.render_node(id, cx, active_node_id)),
-            )))
+            .child(
+                SidebarGroup::new(&ws.name).child(
+                    SidebarMenu::new().children(
+                        ws.root_id
+                            .iter()
+                            .map(|&id| self.render_node(id, cx, active_node_id)),
+                    ),
+                ),
+            )
     }
 
     fn render_footer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -328,11 +334,13 @@ impl ApiClient {
                                             .unwrap_or(response);
 
                                     state.set_value(formatted, window, cx);
+                                    cx.notify();
                                 }
                                 Err(err) => {
                                     state.set_value(format!("Error: {err}"), window, cx);
                                 }
                             });
+                            cx.notify();
                         });
                     })
                     .detach();
