@@ -5,7 +5,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
-use gpui_component::{IconName, Sizable, h_flex, v_flex};
+use gpui_component::{ActiveTheme, IconName, Sizable, StyledExt, h_flex, v_flex};
 
 pub struct Headers {
     pub key: Entity<InputState>,
@@ -100,7 +100,70 @@ pub fn headers_from_json(
         })
         .collect()
 }
-
+pub fn render_response_headers(
+    response_headers: Vec<(String, String)>,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    div()
+        .flex_col()
+        .child(
+            h_flex()
+                .flex_none()
+                .h(px(32.))
+                .items_center()
+                .bg(theme.table_head)
+                .text_color(theme.table_head_foreground)
+                .border_b_1()
+                .border_color(theme.table_row_border)
+                .child(
+                    div()
+                        .flex_1()
+                        .px(px(12.))
+                        .text_sm()
+                        .font_semibold()
+                        .child("Key"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .px(px(12.))
+                        .text_sm()
+                        .font_semibold()
+                        .child("Value"),
+                ),
+        )
+        .children(response_headers.into_iter().map(|(key, value)| {
+            h_flex()
+                .flex_none()
+                .h(px(32.))
+                .items_center()
+                .border_b_1()
+                .border_color(theme.table_row_border)
+                // .hover(|this| this.bg(theme.table_row_hover))
+                .child(
+                    div()
+                        .w(px(200.))
+                        .flex_none()
+                        .px(px(12.))
+                        .text_sm()
+                        .text_ellipsis()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(key),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(12.))
+                        .text_sm()
+                        .text_ellipsis()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(value),
+                )
+        }))
+}
 pub fn render_headers_section(
     api: &mut ApiClient,
     cx: &mut Context<ApiClient>,

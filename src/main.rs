@@ -5,7 +5,7 @@ mod helpers;
 mod http;
 mod query_params;
 mod tabs;
-use crate::headers::headers_from_json;
+use crate::headers::{headers_from_json, render_response_headers};
 use crate::helpers::{build_method_tag, read_dir_to_nodes};
 use crate::query_params::query_params_from_json;
 use crate::tabs::{Tabs, add_tab, render_editor_config, render_tab_bar};
@@ -19,6 +19,7 @@ use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::sidebar::{
     Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
 };
+use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{button::*, *};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -294,7 +295,7 @@ impl ApiClient {
         let method = tab_state.method.clone();
         let url = tab_state.url.clone();
         let is_dirty = tab_state.dirty;
-        let response_panel = tab_state.response_panel.clone();
+        let response_body = tab_state.response_body.clone();
 
         h_flex()
             .w_full()
@@ -311,7 +312,7 @@ impl ApiClient {
             )
             .child(Button::new("send").primary().label("Send").on_click({
                 let url = url.clone();
-                let response_panel = response_panel.clone();
+                let response_body = response_body.clone();
 
                 cx.listener(move |this: &mut ApiClient, _, _window, cx| {
                     let url = url.read(cx).value().to_string();
@@ -360,23 +361,36 @@ impl ApiClient {
                             (vec![], vec![])
                         };
 
-                    cx.notify();
+                    // cx.notify();
 
-                    let response_panel = response_panel.clone();
+                    let response_body = response_body.clone();
+                    let tab_entity = this
+                        .active_tab_id
+                        .and_then(|id| this.tabs.get(&id))
+                        .cloned();
 
                     cx.spawn(async move |this, cx| {
                         let result = http::send_request(&url, &method, query_params, headers).await;
 
-                        let _ = this.update_in(cx, |_this, window, cx| {
-                            response_panel.update(cx, |state, cx| match result {
-                                Ok(response) => {
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            response_body.update(cx, |state, cx| match result {
+                                Ok((body, resp_headers)) => {
                                     let formatted =
-                                        serde_json::from_str::<serde_json::Value>(&response)
+                                        serde_json::from_str::<serde_json::Value>(&body)
                                             .ok()
                                             .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                                            .unwrap_or(response);
+                                            .unwrap_or(body);
 
                                     state.set_value(formatted, window, cx);
+                                    cx.notify();
+
+                                    if let Some(tab) = tab_entity {
+                                        tab.update(cx, |tab, _cx| {
+                                            tab.response_headers = resp_headers;
+                                        });
+                                    }
+
+                                    cx.notify()
                                 }
                                 Err(err) => {
                                     state.set_value(format!("Error: {err}"), window, cx);
@@ -432,12 +446,20 @@ impl Render for ApiClient {
                     ),
                 );
             if show_response {
+                let tab = self.active_tab_id.and_then(|id| self.tabs.get(&id));
+
+                let selected_response_config = tab
+                    .as_ref()
+                    .map(|t| t.read(cx).selected_response_panel_config)
+                    .unwrap_or(0);
+
                 let response_content = div()
                     .w_full()
                     .h_full()
                     .min_h(px(0.))
                     .v_flex()
                     .border_t_1()
+                    .overflow_hidden()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().background)
                     .child(
@@ -464,26 +486,64 @@ impl Render for ApiClient {
                                             {
                                                 tab.update(cx, |tab, _cx| {
                                                     tab.show_response_panel = false;
-                                                })
+                                                });
                                             }
                                             cx.notify();
                                         },
                                     )),
                             ),
                     )
-                    .child({
-                        if let Some(response_panel_state) = self
-                            .active_tab_id
-                            .and_then(|id| self.tabs.get(&id))
-                            .map(|t| t.read(cx).response_panel.clone())
-                        {
-                            Input::new(&response_panel_state)
+                    .child(
+                        div().px(px(24.)).flex_none().child(
+                            TabBar::new("response-config")
+                                .w_full()
+                                .with_variant(tab::TabVariant::Underline)
+                                .selected_index(selected_response_config)
+                                .on_click(cx.listener(
+                                    move |this: &mut ApiClient, idx: &usize, _window, cx| {
+                                        if let Some(tab) =
+                                            this.active_tab_id.and_then(|id| this.tabs.get(&id))
+                                        {
+                                            tab.update(cx, |tab, _cx| {
+                                                tab.selected_response_panel_config = *idx;
+                                            });
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(Tab::new().label("Body"))
+                                .child(Tab::new().label("Headers")),
+                        ),
+                    )
+                    .child(match selected_response_config {
+                        0 => {
+                            let response_body_state =
+                                tab.unwrap().read(cx).response_body.clone();
+                            div()
                                 .flex_1()
-                                .appearance(false)
+                                .min_h(px(0.))
+                                .overflow_hidden()
+                                .px(px(24.))
+                                .child(
+                                    Input::new(&response_body_state)
+                                        .flex_1()
+                                        .h_full()
+                                        .appearance(false),
+                                )
                                 .into_any_element()
-                        } else {
-                            div().child("issue").into_any_element()
                         }
+                        1 => {
+                            let response_headers =
+                                tab.unwrap().read(cx).response_headers.clone();
+                            div()
+                                .flex_1()
+                                .min_h(px(0.))
+                                .overflow_scrollbar()
+                                .px(px(24.))
+                                .child(render_response_headers(response_headers, cx))
+                                .into_any_element()
+                        }
+                        _ => div().child("issue").into_any_element(),
                     });
                 v_resizable("editor-response-split")
                     .child(

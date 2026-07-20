@@ -20,7 +20,9 @@ pub struct Tabs {
     pub(crate) pending: bool,
     pub(crate) dirty: bool,
     pub(crate) selected_editor_config: usize,
-    pub(crate) response_panel: Entity<InputState>,
+    pub(crate) selected_response_panel_config: usize,
+    pub(crate) response_body: Entity<InputState>,
+    pub(crate) response_headers: Vec<(String, String)>,
     pub(crate) show_response_panel: bool,
 }
 
@@ -50,7 +52,7 @@ pub fn add_tab(
         )
     });
 
-    let response_panel_state = cx.new(|cx| {
+    let response_body_state = cx.new(|cx| {
         InputState::new(window, cx)
             .code_editor("json")
             .line_number(true)
@@ -67,7 +69,9 @@ pub fn add_tab(
         pending: false,
         dirty: false,
         selected_editor_config: 0,
-        response_panel: response_panel_state,
+        selected_response_panel_config: 0,
+        response_body: response_body_state,
+        response_headers: vec![],
         show_response_panel: false,
     };
 

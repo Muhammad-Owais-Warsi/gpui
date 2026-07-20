@@ -24,7 +24,7 @@ pub async fn send_request(
     method: &str,
     query_params: Vec<(String, String)>,
     headers: Vec<(String, String)>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, Vec<(String, String)>)> {
     let url = url.to_string();
     let mut req_headers = HeaderMap::new();
     for (key, value) in &headers {
@@ -49,8 +49,13 @@ pub async fn send_request(
                 req = req.query(&query_pairs);
             }
             let resp = req.send().await?;
+            let headers: Vec<(String, String)> = resp
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect();
             let body = resp.text().await?;
-            Ok::<_, anyhow::Error>(body)
+            Ok::<_, anyhow::Error>((body, headers))
         }
         .await;
         let _ = tx.send(result);
