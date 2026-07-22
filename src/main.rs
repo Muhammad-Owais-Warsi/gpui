@@ -19,6 +19,7 @@ use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::sidebar::{
     Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
 };
+use gpui_component::spinner::Spinner;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{button::*, *};
 use std::collections::HashMap;
@@ -289,13 +290,14 @@ impl ApiClient {
         let Some(tab) = self.active_tab_id.and_then(|id| self.tabs.get(&id)) else {
             return div().child("No tab open");
         };
+        let tab = tab.clone(); // one Entity<Tab> handle, reused everywhere below
 
         let tab_state = tab.read(cx);
-
         let method = tab_state.method.clone();
         let url = tab_state.url.clone();
         let is_dirty = tab_state.dirty;
         let response_body = tab_state.response_body.clone();
+        let pending = tab_state.pending.clone();
 
         h_flex()
             .w_full()
@@ -310,98 +312,103 @@ impl ApiClient {
                         this.child(div().size_2().rounded_full().bg(cx.theme().primary))
                     }),
             )
-            .child(Button::new("send").primary().label("Send").on_click({
-                let url = url.clone();
-                let response_body = response_body.clone();
+            .child(
+                Button::new("send")
+                    .primary()
+                    .icon(IconName::Network)
+                    .label("Send")
+                    .disabled(pending)
+                    .loading(pending)
+                    // .loading_icon(Spinner::new().into_icon)
+                    .on_click({
+                        let url = url.clone();
+                        let response_body = response_body.clone();
+                        let tab = tab.clone(); // captured by the click closure, not re-fetched from self
 
-                cx.listener(move |this: &mut ApiClient, _, _window, cx| {
-                    let url = url.read(cx).value().to_string();
-                    let method = method
-                        .read(cx)
-                        .selected_value()
-                        .unwrap_or(&"GET".to_string())
-                        .clone();
+                        cx.listener(move |_this: &mut ApiClient, _, _window, cx| {
+                            let url_str = url.read(cx).value().to_string();
+                            let method_str = method
+                                .read(cx)
+                                .selected_value()
+                                .unwrap_or(&"GET".to_string())
+                                .clone();
 
-                    let (query_params, headers) =
-                        if let Some(tab) = this.active_tab_id.and_then(|id| this.tabs.get(&id)) {
-                            tab.update(cx, |tab, _cx| {
+                            let (query_params, headers) = tab.update(cx, |tab, cx| {
                                 tab.show_response_panel = true;
+                                tab.pending = true;
+
+                                let qp = tab
+                                    .query_params
+                                    .iter()
+                                    .filter(|qp| qp.read(cx).active)
+                                    .map(|qp| {
+                                        let state = qp.read(cx);
+                                        (
+                                            state.key.read(cx).value().to_string(),
+                                            state.value.read(cx).value().to_string(),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                let hd = tab
+                                    .headers
+                                    .iter()
+                                    .filter(|h| h.read(cx).active)
+                                    .map(|h| {
+                                        let state = h.read(cx);
+                                        (
+                                            state.key.read(cx).value().to_string(),
+                                            state.value.read(cx).value().to_string(),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                cx.notify();
+                                (qp, hd)
                             });
 
-                            let qp = tab
-                                .read(cx)
-                                .query_params
-                                .iter()
-                                .filter(|qp| qp.read(cx).active)
-                                .map(|qp| {
-                                    let state = qp.read(cx);
-                                    (
-                                        state.key.read(cx).value().to_string(),
-                                        state.value.read(cx).value().to_string(),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
+                            let response_body = response_body.clone();
+                            let tab_for_spawn = tab.clone(); // separate clone for the async block
 
-                            let hd = tab
-                                .read(cx)
-                                .headers
-                                .iter()
-                                .filter(|h| h.read(cx).active)
-                                .map(|h| {
-                                    let state = h.read(cx);
-                                    (
-                                        state.key.read(cx).value().to_string(),
-                                        state.value.read(cx).value().to_string(),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
+                            cx.spawn(async move |this, cx| {
+                                let result = http::send_request(
+                                    &url_str,
+                                    &method_str,
+                                    query_params,
+                                    headers,
+                                )
+                                .await;
 
-                            (qp, hd)
-                        } else {
-                            (vec![], vec![])
-                        };
+                                let _ = this.update_in(cx, |_this, window, cx| {
+                                    response_body.update(cx, |state, cx| match result {
+                                        Ok((body, resp_headers)) => {
+                                            let formatted =
+                                                serde_json::from_str::<serde_json::Value>(&body)
+                                                    .ok()
+                                                    .and_then(|v| {
+                                                        serde_json::to_string_pretty(&v).ok()
+                                                    })
+                                                    .unwrap_or(body);
 
-                    // cx.notify();
+                                            state.set_value(formatted, window, cx);
 
-                    let response_body = response_body.clone();
-                    let tab_entity = this
-                        .active_tab_id
-                        .and_then(|id| this.tabs.get(&id))
-                        .cloned();
-
-                    cx.spawn(async move |this, cx| {
-                        let result = http::send_request(&url, &method, query_params, headers).await;
-
-                        let _ = this.update_in(cx, |this, window, cx| {
-                            response_body.update(cx, |state, cx| match result {
-                                Ok((body, resp_headers)) => {
-                                    let formatted =
-                                        serde_json::from_str::<serde_json::Value>(&body)
-                                            .ok()
-                                            .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                                            .unwrap_or(body);
-
-                                    state.set_value(formatted, window, cx);
+                                            tab_for_spawn.update(cx, |tab, cx| {
+                                                tab.response_headers = resp_headers;
+                                                tab.pending = false;
+                                                cx.notify();
+                                            });
+                                        }
+                                        Err(err) => {
+                                            state.set_value(format!("Error: {err}"), window, cx);
+                                        }
+                                    });
                                     cx.notify();
-
-                                    if let Some(tab) = tab_entity {
-                                        tab.update(cx, |tab, _cx| {
-                                            tab.response_headers = resp_headers;
-                                        });
-                                    }
-
-                                    cx.notify()
-                                }
-                                Err(err) => {
-                                    state.set_value(format!("Error: {err}"), window, cx);
-                                }
-                            });
-                            cx.notify();
-                        });
-                    })
-                    .detach();
-                })
-            }))
+                                });
+                            })
+                            .detach();
+                        })
+                    }),
+            )
     }
 }
 
@@ -454,8 +461,9 @@ impl Render for ApiClient {
                     .unwrap_or(0);
 
                 let response_content = div()
-                    .w_full()
+                    .id("response-panel-vscroll") // <-- added: needed for overflow_y_scrollbar to actually track state
                     .h_full()
+                    .overflow_y_scrollbar()
                     .min_h(px(0.))
                     .v_flex()
                     .border_t_1()
@@ -517,11 +525,12 @@ impl Render for ApiClient {
                     )
                     .child(match selected_response_config {
                         0 => {
-                            let response_body_state =
-                                tab.unwrap().read(cx).response_body.clone();
+                            let response_body_state = tab.unwrap().read(cx).response_body.clone();
                             div()
+                                .id("response-body-hscroll") // <-- added, in case long single-line JSON needs horizontal scroll too
                                 .flex_1()
                                 .min_h(px(0.))
+                                .min_w(px(0.))
                                 .overflow_hidden()
                                 .px(px(24.))
                                 .child(
@@ -533,12 +542,11 @@ impl Render for ApiClient {
                                 .into_any_element()
                         }
                         1 => {
-                            let response_headers =
-                                tab.unwrap().read(cx).response_headers.clone();
+                            let response_headers = tab.unwrap().read(cx).response_headers.clone();
                             div()
                                 .flex_1()
                                 .min_h(px(0.))
-                                .overflow_scrollbar()
+                                .min_w(px(0.))
                                 .px(px(24.))
                                 .child(render_response_headers(response_headers, cx))
                                 .into_any_element()

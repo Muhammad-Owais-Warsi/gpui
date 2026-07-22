@@ -4,6 +4,7 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_component::{ActiveTheme, IconName, Sizable, StyledExt, h_flex, v_flex};
 
@@ -105,64 +106,83 @@ pub fn render_response_headers(
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
+
     div()
-        .flex_col()
+        .id("response-headers-vscroll") // outer: owns vertical scroll
+        .w_full()
+        .flex_1()
+        .min_h(px(0.))
+        .overflow_y_scrollbar()
         .child(
-            h_flex()
-                .flex_none()
-                .h(px(32.))
-                .items_center()
-                .bg(theme.table_head)
-                .text_color(theme.table_head_foreground)
-                .border_b_1()
-                .border_color(theme.table_row_border)
+            div()
+                .id("response-headers-hscroll") // inner: owns horizontal scroll — different id from the outer
+                .w_full()
+                .min_w(px(0.))
+                .overflow_x_scrollbar()
                 .child(
                     div()
-                        .flex_1()
-                        .px(px(12.))
-                        .text_sm()
-                        .font_semibold()
-                        .child("Key"),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .px(px(12.))
-                        .text_sm()
-                        .font_semibold()
-                        .child("Value"),
+                        .flex_col()
+                        .min_w(px(432.)) // Key (200) + Value (232) — forces horizontal scroll when panel is narrower
+                        .child(
+                            h_flex()
+                                .flex_none()
+                                .h(px(32.))
+                                .items_center()
+                                .bg(theme.table_head)
+                                .text_color(theme.table_head_foreground)
+                                .border_b_1()
+                                .border_color(theme.table_row_border)
+                                .child(
+                                    div()
+                                        .w(px(200.))
+                                        .flex_none()
+                                        .px(px(12.))
+                                        .text_sm()
+                                        .font_semibold()
+                                        .child("Key"),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(232.))
+                                        .flex_none()
+                                        .px(px(12.))
+                                        .text_sm()
+                                        .font_semibold()
+                                        .child("Value"),
+                                ),
+                        )
+                        .children(response_headers.into_iter().map(|(key, value)| {
+                            h_flex()
+                                .flex_none()
+                                .h(px(32.))
+                                .items_center()
+                                .border_b_1()
+                                .border_color(theme.table_row_border)
+                                .child(
+                                    div()
+                                        .w(px(200.))
+                                        .flex_none()
+                                        .px(px(12.))
+                                        .text_sm()
+                                        .text_ellipsis()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .child(key),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(232.))
+                                        .flex_none()
+                                        .px(px(12.))
+                                        .text_sm()
+                                        .text_ellipsis()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .child(value),
+                                )
+                        })),
                 ),
         )
-        .children(response_headers.into_iter().map(|(key, value)| {
-            h_flex()
-                .flex_none()
-                .h(px(32.))
-                .items_center()
-                .border_b_1()
-                .border_color(theme.table_row_border)
-                // .hover(|this| this.bg(theme.table_row_hover))
-                .child(
-                    div()
-                        .w(px(200.))
-                        .flex_none()
-                        .px(px(12.))
-                        .text_sm()
-                        .text_ellipsis()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(key),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .px(px(12.))
-                        .text_sm()
-                        .text_ellipsis()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(value),
-                )
-        }))
 }
 pub fn render_headers_section(
     api: &mut ApiClient,
